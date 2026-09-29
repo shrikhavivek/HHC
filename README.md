@@ -65,10 +65,13 @@ Every generated draft also has an **Edit collage** control. Editors can
 reorder panels, remove a poor image, or replace it with another source-backed
 current angle, historical match, or verified designer reference. A tuning
 control on every selected panel can make it narrower or wider, keep the whole
-photo visible, or crop to fill with adjustable horizontal focus, vertical
-focus, and zoom. The selected order and per-image layout are stored on the
-case, each save creates an audit event, and the app re-renders the preview and
-evidence bundle without publishing to WordPress or changing the source image.
+photo visible, or open a freeform manual cropper. In crop mode, draw a rectangle
+around the model, move it, and resize its width and height independently using
+eight edge and corner handles. Everything outside the selected rectangle is
+excluded from the rendered panel. The selected order and per-image layout are
+stored on the case, each save creates an audit event, and the app re-renders
+the preview and evidence bundle without publishing to WordPress or changing
+the source image.
 
 Editors can also upload a JPEG, PNG, or WebP directly inside the collage
 editor. Uploads preserve normal source resolution, require a credit and usage

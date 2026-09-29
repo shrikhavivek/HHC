@@ -1,5 +1,5 @@
 from typing import Literal
-from pydantic import BaseModel, Field, HttpUrl, field_validator
+from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
 
 
 DecisionType = Literal["approved", "rejected", "similar_not_same", "needs_more_research"]
@@ -31,12 +31,26 @@ class CollageInput(BaseModel):
     candidate_id: str
 
 
+class CropRectangle(BaseModel):
+    x: float = Field(default=0, ge=0, le=1)
+    y: float = Field(default=0, ge=0, le=1)
+    width: float = Field(default=1, ge=0.05, le=1)
+    height: float = Field(default=1, ge=0.05, le=1)
+
+    @model_validator(mode="after")
+    def stays_inside_image(self):
+        if self.x + self.width > 1.000001 or self.y + self.height > 1.000001:
+            raise ValueError("Crop rectangle must stay inside the source image")
+        return self
+
+
 class PanelLayoutOption(BaseModel):
     width_scale: float = Field(default=1.0, ge=0.65, le=1.75)
     crop_mode: Literal["fit", "crop"] = "fit"
     focal_x: float = Field(default=0.5, ge=0, le=1)
     focal_y: float = Field(default=0.5, ge=0, le=1)
     zoom: float = Field(default=1.0, ge=1, le=2.5)
+    crop_rect: CropRectangle | None = None
 
 
 class CollageEditInput(BaseModel):

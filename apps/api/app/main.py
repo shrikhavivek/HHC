@@ -10,7 +10,7 @@ from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, 
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import case as sql_case, func, select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 from .assets import build_panel_catalog, build_render_assets, default_panel_ids, normalize_case_assets
@@ -195,14 +195,13 @@ def dashboard(db: Session = Depends(get_db)):
 
 @app.get("/api/cases")
 def list_cases(status_filter: str | None = Query(default=None, alias="status"), db: Session = Depends(get_db)):
-    priority = sql_case(
-        (Case.status == "review_ready", 0),
-        (Case.status == "context_review", 1),
-        (Case.status == "needs_research", 2),
-        (Case.status == "approved", 3),
-        else_=4,
+    # event_date is the source Reddit post's published date for automated
+    # cases. Missing source dates fall back to ingestion time and remain last.
+    stmt = select(Case).order_by(
+        Case.event_date.desc().nulls_last(),
+        Case.created_at.desc(),
+        Case.id.asc(),
     )
-    stmt = select(Case).order_by(priority, Case.created_at.desc())
     has_live = bool(db.scalar(select(func.count(Case.id)).where(Case.demo_data.is_(False), Case.source_type == "reddit_rss")))
     if has_live:
         stmt = stmt.where(Case.demo_data.is_(False))

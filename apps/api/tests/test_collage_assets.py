@@ -238,6 +238,7 @@ def test_panel_width_and_focal_crop_are_applied_and_recorded(tmp_path):
         "focal_x": 1.0,
         "focal_y": 0.5,
         "zoom": 2.0,
+        "crop_rect": None,
     }
     with Image.open(tmp_path / "output" / "case-case-1" / "collage.png") as collage:
         # The narrowed first panel ends well before the midpoint, and its
@@ -247,3 +248,37 @@ def test_panel_width_and_focal_crop_are_applied_and_recorded(tmp_path):
         assert second_panel_pixel[0] == 0
         assert second_panel_pixel[1] > 100
         assert second_panel_pixel[2] == 0
+
+
+def test_manual_crop_rectangle_keeps_only_the_selected_source_area(tmp_path):
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    sales_page = Image.new("RGB", (1000, 500), "#ff0000")
+    sales_page.paste(Image.new("RGB", (300, 500), "#0000ff"), (700, 0))
+    sales_page.save(static_dir / "look-1.png")
+
+    case = _case([])
+    decision = SimpleNamespace(id="decision-manual-crop", decision="editor_draft", reason="Keep only the model area")
+    crop_rect = {"x": 0.7, "y": 0, "width": 0.3, "height": 1}
+    _, manifest_path, _ = render_bundle(
+        str(tmp_path / "output"),
+        str(static_dir),
+        case,
+        [],
+        decision,
+        panel_ids=["current-primary"],
+        panel_options={
+            "current-primary": {
+                "width_scale": 1,
+                "crop_mode": "crop",
+                "crop_rect": crop_rect,
+            },
+        },
+    )
+
+    manifest = json.loads(open(manifest_path, encoding="utf-8").read())
+    assert manifest["panel_options"]["current-primary"]["crop_rect"] == crop_rect
+    with Image.open(tmp_path / "output" / "case-case-1" / "collage.png") as collage:
+        assert collage.size == (1200, 2000)
+        assert collage.getpixel((collage.width // 2, collage.height // 2)) == (0, 0, 255)
+        assert collage.getpixel((20, collage.height // 2)) == (0, 0, 255)

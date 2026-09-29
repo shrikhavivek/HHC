@@ -32,6 +32,7 @@ type CaseSummary = {
   demo_data: boolean;
   source_type: string;
   fashion_category: "women" | "men" | "mixed" | "unclassified";
+  created_at: string;
 };
 type Evidence = { publisher: string; url: string; grade: string; quote: string; credit?: string; retrieved_at?: string };
 type Candidate = {
@@ -86,12 +87,14 @@ type CollagePanel = {
   rights_status: string;
   source_grade: string;
 };
+type CropRectangle = { x: number; y: number; width: number; height: number };
 type PanelLayoutOption = {
   width_scale: number;
   crop_mode: "fit" | "crop";
   focal_x: number;
   focal_y: number;
   zoom: number;
+  crop_rect?: CropRectangle | null;
 };
 type CollageEditor = {
   panels: CollagePanel[];
@@ -115,7 +118,8 @@ type CollageResult = { previewUrl: string; bundleUrl: string; assetCount: number
 
 const REVIEW_STATUSES = new Set(["review_ready", "context_review", "needs_research", "research_queued"]);
 const ARCHIVE_STATUSES = new Set(["approved", "rejected", "auto_rejected", "similar_not_same"]);
-const DEFAULT_PANEL_OPTION: PanelLayoutOption = { width_scale: 1, crop_mode: "fit", focal_x: .5, focal_y: .5, zoom: 1 };
+const DEFAULT_CROP_RECT: CropRectangle = { x: 0, y: 0, width: 1, height: 1 };
+const DEFAULT_PANEL_OPTION: PanelLayoutOption = { width_scale: 1, crop_mode: "fit", focal_x: .5, focal_y: .5, zoom: 1, crop_rect: DEFAULT_CROP_RECT };
 
 const VIEW_META: Record<WorkspaceView, { label: string; short: string; title: string; accent: string; description: string; listTitle: string; listKicker: string }> = {
   today: {
@@ -197,6 +201,18 @@ function belongsToView(item: CaseSummary, view: WorkspaceView) {
   return true;
 }
 
+function newestPostFirst(left: CaseSummary, right: CaseSummary) {
+  const parsedLeftPostDate = left.event_date ? Date.parse(left.event_date) : Number.NaN;
+  const parsedRightPostDate = right.event_date ? Date.parse(right.event_date) : Number.NaN;
+  const leftPostDate = Number.isFinite(parsedLeftPostDate) ? parsedLeftPostDate : Number.NEGATIVE_INFINITY;
+  const rightPostDate = Number.isFinite(parsedRightPostDate) ? parsedRightPostDate : Number.NEGATIVE_INFINITY;
+  if (leftPostDate !== rightPostDate) return rightPostDate - leftPostDate;
+  const leftIngested = Date.parse(left.created_at) || 0;
+  const rightIngested = Date.parse(right.created_at) || 0;
+  if (leftIngested !== rightIngested) return rightIngested - leftIngested;
+  return left.id.localeCompare(right.id);
+}
+
 function Icon({ name, size = 20 }: { name: string; size?: number }) {
   const paths: Record<string, React.ReactNode> = {
     grid: <><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></>,
@@ -230,6 +246,183 @@ function Icon({ name, size = 20 }: { name: string; size?: number }) {
 
 function StatusPill({ status }: { status: string }) {
   return <span className={`status status-${status}`}><i />{pretty(status)}</span>;
+}
+
+function ManualCropEditor({ image, label, option, onChange }: {
+  image: string;
+  label: string;
+  option: PanelLayoutOption;
+  onChange: (patch: Partial<PanelLayoutOption>) => void;
+}) {
+  const [sourceAspect, setSourceAspect] = useState(.75);
+  const [drawingNew, setDrawingNew] = useState(false);
+  const [dragging, setDragging] = useState<string | null>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
+  const rect = { ...DEFAULT_CROP_RECT, ...(option.crop_rect || {}) };
+  const drag = useRef<{
+    pointerId: number;
+    mode: string;
+    startX: number;
+    startY: number;
+    rect: CropRectangle;
+  } | null>(null);
+  const minimum = .05;
+  const limit = (value: number, lower: number, upper: number) => Math.max(lower, Math.min(upper, value));
+
+  function commit(next: CropRectangle) {
+    onChange({
+      crop_rect: {
+        x: Math.round(next.x * 10000) / 10000,
+        y: Math.round(next.y * 10000) / 10000,
+        width: Math.round(next.width * 10000) / 10000,
+        height: Math.round(next.height * 10000) / 10000,
+      },
+      focal_x: .5,
+      focal_y: .5,
+      zoom: 1,
+    });
+  }
+
+  function beginDrag(event: React.PointerEvent<HTMLElement>, mode: string) {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    const stage = stageRef.current;
+    if (!stage) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const bounds = stage.getBoundingClientRect();
+    drag.current = {
+      pointerId: event.pointerId,
+      mode,
+      startX: (event.clientX - bounds.left) / Math.max(1, bounds.width),
+      startY: (event.clientY - bounds.top) / Math.max(1, bounds.height),
+      rect: { ...rect },
+    };
+    stage.setPointerCapture(event.pointerId);
+    setDragging(mode);
+    if (mode === "draw") setDrawingNew(false);
+  }
+
+  function moveCrop(event: React.PointerEvent<HTMLDivElement>) {
+    const origin = drag.current;
+    const stage = stageRef.current;
+    if (!origin || origin.pointerId !== event.pointerId || !stage) return;
+    const bounds = stage.getBoundingClientRect();
+    const currentX = limit((event.clientX - bounds.left) / Math.max(1, bounds.width), 0, 1);
+    const currentY = limit((event.clientY - bounds.top) / Math.max(1, bounds.height), 0, 1);
+    const dx = currentX - origin.startX;
+    const dy = currentY - origin.startY;
+    const start = origin.rect;
+
+    if (origin.mode === "draw") {
+      let left = Math.min(origin.startX, currentX);
+      let top = Math.min(origin.startY, currentY);
+      let right = Math.max(origin.startX, currentX);
+      let bottom = Math.max(origin.startY, currentY);
+      if (right - left < minimum) right = Math.min(1, left + minimum);
+      if (bottom - top < minimum) bottom = Math.min(1, top + minimum);
+      left = Math.min(left, right - minimum);
+      top = Math.min(top, bottom - minimum);
+      commit({ x: left, y: top, width: right - left, height: bottom - top });
+      return;
+    }
+
+    if (origin.mode === "move") {
+      commit({
+        ...start,
+        x: limit(start.x + dx, 0, 1 - start.width),
+        y: limit(start.y + dy, 0, 1 - start.height),
+      });
+      return;
+    }
+
+    let left = start.x;
+    let top = start.y;
+    let right = start.x + start.width;
+    let bottom = start.y + start.height;
+    if (origin.mode.includes("w")) left = limit(start.x + dx, 0, right - minimum);
+    if (origin.mode.includes("e")) right = limit(start.x + start.width + dx, left + minimum, 1);
+    if (origin.mode.includes("n")) top = limit(start.y + dy, 0, bottom - minimum);
+    if (origin.mode.includes("s")) bottom = limit(start.y + start.height + dy, top + minimum, 1);
+    commit({ x: left, y: top, width: right - left, height: bottom - top });
+  }
+
+  function endDrag(event: React.PointerEvent<HTMLDivElement>) {
+    if (drag.current?.pointerId !== event.pointerId) return;
+    drag.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    setDragging(null);
+  }
+
+  function moveWithKeyboard(event: React.KeyboardEvent<HTMLDivElement>) {
+    const step = event.shiftKey ? .05 : .01;
+    let x = rect.x;
+    let y = rect.y;
+    if (event.key === "ArrowLeft") x = limit(rect.x - step, 0, 1 - rect.width);
+    else if (event.key === "ArrowRight") x = limit(rect.x + step, 0, 1 - rect.width);
+    else if (event.key === "ArrowUp") y = limit(rect.y - step, 0, 1 - rect.height);
+    else if (event.key === "ArrowDown") y = limit(rect.y + step, 0, 1 - rect.height);
+    else return;
+    event.preventDefault();
+    commit({ ...rect, x, y });
+  }
+
+  function setCropWidth(width: number) {
+    const nextWidth = limit(width, minimum, 1);
+    const center = rect.x + rect.width / 2;
+    commit({ ...rect, x: limit(center - nextWidth / 2, 0, 1 - nextWidth), width: nextWidth });
+  }
+
+  function setCropHeight(height: number) {
+    const nextHeight = limit(height, minimum, 1);
+    const center = rect.y + rect.height / 2;
+    commit({ ...rect, y: limit(center - nextHeight / 2, 0, 1 - nextHeight), height: nextHeight });
+  }
+
+  const handles = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
+  return <div className="manual-crop-editor">
+    <div className="manual-crop-heading"><div><small>Manual crop</small><strong>Keep only what you need</strong><p>Draw a box around the model, then drag its edges or corners to set the crop width and height independently.</p></div><div><button type="button" className={drawingNew ? "active" : ""} onClick={() => setDrawingNew(current => !current)}>{drawingNew ? "Draw on image…" : "Draw new crop"}</button><button type="button" onClick={() => { commit(DEFAULT_CROP_RECT); setDrawingNew(false); }}>Use full image</button></div></div>
+    <div className={`manual-crop-stage-shell ${drawingNew ? "is-drawing" : ""}`}>
+      <div
+        ref={stageRef}
+        className={`manual-crop-stage ${dragging ? "is-dragging" : ""}`}
+        style={{ width: `min(100%, ${Math.max(48, Math.round(320 * sourceAspect))}px)`, aspectRatio: sourceAspect }}
+        onPointerDown={drawingNew ? event => beginDrag(event, "draw") : undefined}
+        onPointerMove={moveCrop}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+      >
+        <img
+          src={image}
+          alt={label}
+          draggable={false}
+          onDragStart={event => event.preventDefault()}
+          onLoad={event => {
+            const nextAspect = event.currentTarget.naturalWidth / Math.max(1, event.currentTarget.naturalHeight);
+            if (Number.isFinite(nextAspect) && nextAspect > 0) setSourceAspect(nextAspect);
+          }}
+        />
+        <div
+          className={`crop-selection ${drawingNew ? "is-disabled" : ""}`}
+          style={{ left: `${rect.x * 100}%`, top: `${rect.y * 100}%`, width: `${rect.width * 100}%`, height: `${rect.height * 100}%` }}
+          role="group"
+          tabIndex={drawingNew ? -1 : 0}
+          aria-label={`Selected crop for ${label}: ${Math.round(rect.width * 100)} percent wide and ${Math.round(rect.height * 100)} percent high. Drag to move, use handles to resize, or use arrow keys.`}
+          onPointerDown={event => beginDrag(event, "move")}
+          onKeyDown={moveWithKeyboard}
+        >
+          <span className="selection-grid selection-grid-v-one"/><span className="selection-grid selection-grid-v-two"/><span className="selection-grid selection-grid-h-one"/><span className="selection-grid selection-grid-h-two"/>
+          {handles.map(handle => <span key={handle} className={`crop-handle crop-handle-${handle}`} onPointerDown={event => beginDrag(event, handle)} aria-hidden/>)}
+          <span className="selection-size">{Math.round(rect.width * 100)}% × {Math.round(rect.height * 100)}%</span>
+        </div>
+        {drawingNew && <span className="draw-crop-prompt">Drag around the model</span>}
+      </div>
+    </div>
+    <div className="crop-dimension-controls">
+      <label><span>Crop width <b>{Math.round(rect.width * 100)}%</b></span><input type="range" min="5" max="100" step="1" value={Math.round(rect.width * 100)} onChange={event => setCropWidth(Number(event.target.value) / 100)}/><small>Narrow</small><small>Full width</small></label>
+      <label><span>Crop height <b>{Math.round(rect.height * 100)}%</b></span><input type="range" min="5" max="100" step="1" value={Math.round(rect.height * 100)} onChange={event => setCropHeight(Number(event.target.value) / 100)}/><small>Short</small><small>Full height</small></label>
+    </div>
+    <p className="crop-keyboard-note">Move the selected box directly, resize any of its eight handles, or use arrow keys for precise positioning. Hold Shift for larger steps.</p>
+  </div>;
 }
 
 function AssetBoard({ assets }: { assets: OutfitAsset[] }) {
@@ -402,7 +595,7 @@ export default function DashboardPage() {
     const filterMatch = filter === "all" || (workspaceView === "rights" ? item.risk_level === filter : item.status === filter);
     const haystack = `${item.celebrity} ${item.designer} ${item.event_name} ${item.title} ${item.match_type} ${item.fashion_category}`.toLowerCase();
     return filterMatch && haystack.includes(search.trim().toLowerCase());
-  }), [cases, filter, search, workspaceView]);
+  }).sort(newestPostFirst), [cases, filter, search, workspaceView]);
 
   useEffect(() => {
     if (loading) return;
@@ -503,7 +696,12 @@ export default function DashboardPage() {
   }
 
   function panelOption(panelId: string): PanelLayoutOption {
-    return { ...DEFAULT_PANEL_OPTION, ...(editorPanelOptions[panelId] || {}) };
+    const saved = editorPanelOptions[panelId] || {};
+    return {
+      ...DEFAULT_PANEL_OPTION,
+      ...saved,
+      crop_rect: { ...DEFAULT_CROP_RECT, ...(saved.crop_rect || {}) },
+    };
   }
 
   function updatePanelOption(panelId: string, patch: Partial<PanelLayoutOption>) {
@@ -734,12 +932,8 @@ export default function DashboardPage() {
               {tuning && <div className="panel-tuning">
                 <div className="panel-tuning-heading"><div><small>Image layout</small><strong>Resize &amp; crop</strong></div><button type="button" onClick={() => updatePanelOption(panel.id, DEFAULT_PANEL_OPTION)}>Reset image</button></div>
                 <label className="panel-range"><span>Panel width <b>{Math.round(option.width_scale * 100)}%</b></span><input type="range" min="65" max="175" step="5" value={Math.round(option.width_scale * 100)} onChange={event => updatePanelOption(panel.id, { width_scale: Number(event.target.value) / 100 })}/><small>Narrower</small><small>Wider</small></label>
-                <div className="crop-mode-control"><span>Image treatment</span><div><button type="button" className={option.crop_mode === "fit" ? "active" : ""} onClick={() => updatePanelOption(panel.id, { crop_mode: "fit", zoom: 1 })}>Show full image</button><button type="button" className={option.crop_mode === "crop" ? "active" : ""} onClick={() => updatePanelOption(panel.id, { crop_mode: "crop" })}>Crop to fill</button></div><p>{option.crop_mode === "fit" ? "The complete photo stays visible; a soft background fills extra space." : "Drag the focus and zoom controls to choose the visible area."}</p></div>
-                {option.crop_mode === "crop" && <div className="crop-controls">
-                  <label className="panel-range"><span>Horizontal focus <b>{Math.round(option.focal_x * 100)}%</b></span><input type="range" min="0" max="100" step="1" value={Math.round(option.focal_x * 100)} onChange={event => updatePanelOption(panel.id, { focal_x: Number(event.target.value) / 100 })}/><small>Left</small><small>Right</small></label>
-                  <label className="panel-range"><span>Vertical focus <b>{Math.round(option.focal_y * 100)}%</b></span><input type="range" min="0" max="100" step="1" value={Math.round(option.focal_y * 100)} onChange={event => updatePanelOption(panel.id, { focal_y: Number(event.target.value) / 100 })}/><small>Top</small><small>Bottom</small></label>
-                  <label className="panel-range"><span>Crop zoom <b>{Math.round(option.zoom * 100)}%</b></span><input type="range" min="100" max="250" step="5" value={Math.round(option.zoom * 100)} onChange={event => updatePanelOption(panel.id, { zoom: Number(event.target.value) / 100 })}/><small>Original</small><small>Closer</small></label>
-                </div>}
+                <div className="crop-mode-control"><span>Image treatment</span><div><button type="button" className={option.crop_mode === "fit" ? "active" : ""} onClick={() => updatePanelOption(panel.id, { crop_mode: "fit", zoom: 1 })}>Show full image</button><button type="button" className={option.crop_mode === "crop" ? "active" : ""} onClick={() => updatePanelOption(panel.id, { crop_mode: "crop", crop_rect: option.crop_rect || { ...DEFAULT_CROP_RECT } })}>Manual crop</button></div><p>{option.crop_mode === "fit" ? "The complete photo stays visible; a soft background fills extra space." : "Draw and resize a freeform box to remove page text, banners, products, or any other unwanted area."}</p></div>
+                {option.crop_mode === "crop" && <ManualCropEditor image={asset(panel.image_path)} label={panel.label} option={option} onChange={patch => updatePanelOption(panel.id, patch)}/>} 
               </div>}
             </article>;
           })}</div>

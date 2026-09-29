@@ -91,17 +91,19 @@ def _justified_geometry(
     images: list[Image.Image],
     canvas_width: int,
     width_scales: list[float] | None = None,
+    aspect_ratios: list[float] | None = None,
 ) -> list[list[tuple[int, int]]]:
     """Return exact edge-to-edge panel sizes without cropping any image."""
     geometry: list[list[tuple[int, int]]] = []
     cursor = 0
     scales = width_scales or [1.0] * len(images)
+    source_ratios = aspect_ratios or [image.width / max(1, image.height) for image in images]
     for row_size in _row_sizes(len(images)):
-        row = images[cursor:cursor + row_size]
         row_scales = scales[cursor:cursor + row_size]
+        row_ratios = source_ratios[cursor:cursor + row_size]
         ratios = [
-            (image.width / max(1, image.height)) * max(0.65, min(1.75, scale))
-            for image, scale in zip(row, row_scales)
+            ratio * max(0.65, min(1.75, scale))
+            for ratio, scale in zip(row_ratios, row_scales)
         ]
         row_height = max(1, round(canvas_width / sum(ratios)))
         widths = [max(1, round(row_height * ratio)) for ratio in ratios]
@@ -121,6 +123,21 @@ def _bounded_float(value, default: float, lower: float, upper: float) -> float:
     return max(lower, min(upper, number))
 
 
+def _normalized_crop_rect(raw) -> dict | None:
+    if not isinstance(raw, dict):
+        return None
+    x = _bounded_float(raw.get("x"), 0.0, 0.0, 0.95)
+    y = _bounded_float(raw.get("y"), 0.0, 0.0, 0.95)
+    width = _bounded_float(raw.get("width"), 1.0 - x, 0.05, 1.0 - x)
+    height = _bounded_float(raw.get("height"), 1.0 - y, 0.05, 1.0 - y)
+    return {
+        "x": round(x, 4),
+        "y": round(y, 4),
+        "width": round(width, 4),
+        "height": round(height, 4),
+    }
+
+
 def _normalized_panel_options(assets: list[dict], raw_options: dict | None) -> dict[str, dict]:
     options = raw_options if isinstance(raw_options, dict) else {}
     normalized: dict[str, dict] = {}
@@ -133,8 +150,17 @@ def _normalized_panel_options(assets: list[dict], raw_options: dict | None) -> d
             "focal_x": round(_bounded_float(raw.get("focal_x"), 0.5, 0.0, 1.0), 3),
             "focal_y": round(_bounded_float(raw.get("focal_y"), 0.5, 0.0, 1.0), 3),
             "zoom": round(_bounded_float(raw.get("zoom"), 1.0, 1.0, 2.5), 2),
+            "crop_rect": _normalized_crop_rect(raw.get("crop_rect")),
         }
     return normalized
+
+
+def _crop_rectangle(image: Image.Image, rect: dict) -> Image.Image:
+    left = max(0, min(image.width - 1, round(rect["x"] * image.width)))
+    top = max(0, min(image.height - 1, round(rect["y"] * image.height)))
+    right = max(left + 1, min(image.width, round((rect["x"] + rect["width"]) * image.width)))
+    bottom = max(top + 1, min(image.height, round((rect["y"] + rect["height"]) * image.height)))
+    return image.crop((left, top, right, bottom))
 
 
 def _crop_panel(image: Image.Image, size: tuple[int, int], option: dict) -> Image.Image:
@@ -209,7 +235,15 @@ def render_bundle(
             opened.append(ImageOps.exif_transpose(source).convert("RGB"))
             source.close()
         width_scales = [normalized_options[str(asset["id"])]["width_scale"] for asset in assets]
-        geometry = _justified_geometry(opened, canvas_width, width_scales)
+        aspect_ratios = []
+        for image, asset in zip(opened, assets):
+            option = normalized_options[str(asset["id"])]
+            rect = option["crop_rect"] if option["crop_mode"] == "crop" else None
+            if rect:
+                aspect_ratios.append((image.width * rect["width"]) / max(1, image.height * rect["height"]))
+            else:
+                aspect_ratios.append(image.width / max(1, image.height))
+        geometry = _justified_geometry(opened, canvas_width, width_scales, aspect_ratios)
         canvas_height = sum(row[0][1] for row in geometry)
         canvas = Image.new("RGB", (canvas_width, canvas_height))
         image_index = 0
@@ -219,7 +253,14 @@ def render_bundle(
             for width, height in row:
                 source = opened[image_index]
                 option = normalized_options[str(assets[image_index]["id"])]
-                if option["crop_mode"] == "crop":
+                if option["crop_mode"] == "crop" and option["crop_rect"]:
+                    selection = _crop_rectangle(source, option["crop_rect"])
+                    if option["width_scale"] != 1.0:
+                        panel = _fit_panel(selection, (width, height), {**option, "focal_x": 0.5, "focal_y": 0.5})
+                    else:
+                        panel = selection.resize((width, height), Image.Resampling.LANCZOS)
+                    selection.close()
+                elif option["crop_mode"] == "crop":
                     panel = _crop_panel(source, (width, height), option)
                 elif option["width_scale"] != 1.0:
                     panel = _fit_panel(source, (width, height), option)
