@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.example
+.next/
+node_modules/
+__pycache__/
+*.pyc
+.pytest_cache/
+data/
+outputs/
+trial-output/
+*.log

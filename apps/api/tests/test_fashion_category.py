@@ -1,0 +1,25 @@
+from types import SimpleNamespace
+
+from app.fashion_category import case_fashion_category, classify_fashion_category
+
+
+def test_known_people_are_routed_to_editorial_fashion_sections():
+    assert classify_fashion_category("Alia Bhatt", "Alia Bhatt in Gucci") == "women"
+    assert classify_fashion_category("Arjun Kapoor", "Arjun Kapoor in Acne Studios") == "men"
+
+
+def test_joint_posts_are_available_to_both_content_desks():
+    assert classify_fashion_category(
+        "Komal Pandey and Siddharth Batra",
+        "Komal Pandey and Siddharth Batra at a fashion show",
+    ) == "mixed"
+
+
+def test_editor_override_wins_over_automatic_classification():
+    case = SimpleNamespace(
+        celebrity="Unresolved Person",
+        source_title="A red carpet look",
+        source_body="",
+        extraction={"fashion_category": "men"},
+    )
+    assert case_fashion_category(case) == "men"

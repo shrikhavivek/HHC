@@ -1,0 +1,73 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-outfit_research}
+      POSTGRES_USER: ${POSTGRES_USER:-outfit}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-outfit} -d ${POSTGRES_DB:-outfit_research}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  api:
+    build: ./apps/api
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://outfit:change-me@db:5432/outfit_research}
+      EDITOR_API_KEY: ${EDITOR_API_KEY:-local-editor-key}
+      CORS_ORIGINS: http://localhost:3100
+      OUTPUT_DIR: /data/outputs
+      MEDIA_DIR: /data/media
+      AUTO_APPROVE: "false"
+      WORDPRESS_PUBLISHER_ENABLED: "false"
+      REDDIT_SOURCE_MODE: rss
+      REDDIT_SUBREDDIT: BollywoodFashion
+      REDDIT_USER_AGENT: "${REDDIT_USER_AGENT:-hhc-daily-drafts/2.0 (contact: admin@highheelconfidential.com)}"
+      SERPAPI_KEY: ${SERPAPI_KEY:-}
+      DESIGNER_REFERENCE_SEARCH_ENABLED: "true"
+      DAILY_AUTOMATION_ENABLED: "true"
+      DAILY_AUTOMATION_LIMIT: ${DAILY_AUTOMATION_LIMIT:-6}
+      DAILY_REMOTE_SEARCH_BUDGET: ${DAILY_REMOTE_SEARCH_BUDGET:-2}
+      DAILY_DESIGNER_SEARCH_BUDGET: ${DAILY_DESIGNER_SEARCH_BUDGET:-2}
+      DAILY_AUTOMATION_HOUR_UTC: ${DAILY_AUTOMATION_HOUR_UTC:-3}
+      DAILY_AUTOMATION_MINUTE_UTC: ${DAILY_AUTOMATION_MINUTE_UTC:-30}
+    ports: ["8100:8000"]
+    volumes:
+      - output_data:/data/outputs
+      - media_data:/data/media
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  web:
+    build:
+      context: ./apps/web
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8100}
+    environment:
+      API_INTERNAL_URL: ${API_INTERNAL_URL:-http://api:8000}
+      EDITOR_API_KEY: ${EDITOR_API_KEY:-local-editor-key}
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8100}
+      WORDPRESS_SITE_URL: ${WORDPRESS_SITE_URL:-https://www.highheelconfidential.com}
+      SESSION_SECRET: ${SESSION_SECRET:-local-development-session-secret-change-me}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      DEMO_LOGIN_ENABLED: ${DEMO_LOGIN_ENABLED:-true}
+      DEMO_USERNAME: ${DEMO_USERNAME:-hhc-demo}
+      DEMO_PASSWORD: ${DEMO_PASSWORD:-HHC-Demo-2026!}
+    ports: ["3100:3000"]
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  output_data:
+  media_data:
