@@ -1,8 +1,8 @@
 # High Heel Confidential — Outfit Research System
 
 An automated editorial research system for celebrity outfit-repeat stories.
-It ingests Reddit, creates one case per outfit, retains a searchable fashion
-archive, and renders draft collages without requiring manual URL or image entry.
+It ingests Reddit automatically, accepts editor-selected public social-post
+URLs, retains a searchable fashion archive, and renders editable draft collages.
 
 ## Run
 
@@ -22,6 +22,16 @@ With `REDDIT_SOURCE_MODE=rss`, the first launch immediately processes the live
 The **Run daily automation** control is an optional run-now trigger; it is not a
 required editorial step. Repeated runs are idempotent, so the same Reddit post
 is not imported twice.
+
+Editors can also choose **Import post URL** and paste a public Instagram,
+Threads, Facebook, X, Pinterest, TikTok, YouTube, or Reddit post. The importer
+uses only title, caption, author, date, and images exposed by the public page;
+private or login-gated content is rejected. Optional celebrity, designer,
+event, title, and description hints can correct sparse source metadata. The
+result enters the same archive-search, matching, collage, rights, and editing
+workflow as an automated Reddit case. A source that exposes only its cover
+image creates a one-image draft; editors can then add properly credited images
+manually instead of the system inventing or scraping unrelated panels.
 
 For every eligible post, the runner:
 
@@ -78,6 +88,27 @@ editor. Uploads preserve normal source resolution, require a credit and usage
 confirmation, remain visibly unverified, and are not included until the editor
 selects them. Fashion-section assignments are inferred from explicit title and
 description evidence and can be corrected to Women, Men, or Both on each case.
+
+The collage editor also supports an optional client-authorized HHC watermark.
+Upload a transparent PNG or WebP, drag it anywhere on the collage, resize it
+from its handles, tilt it with the rotation handle, and adjust width, height,
+opacity, or angle with precision sliders. Side handles resize width, top and
+bottom handles resize height, and corner handles change both dimensions.
+Watermark width and height can each reach 100% of the collage canvas. The
+placement is stored as normalized
+coordinates, so the same transform is applied to the full-resolution PNG and
+WebP rather than only to the browser preview. Editors can hide, restore, reset,
+or replace the mark without changing its source file. A separate unwatermarked
+preview is retained for editing; the downloadable evidence bundle contains the
+finished branded render and records all watermark settings in its manifest.
+
+The editor includes reversible colour controls for both the complete collage
+and the watermark independently. Editors can start from Original, Editorial,
+Soft, Vivid, or Mono presets, then fine-tune brightness, contrast, saturation,
+and grayscale strength. The browser preview and full-resolution export use the
+same saved values. An untouched assembled preview is retained so reopening an
+edit never applies a filter twice, and all adjustment values are included in
+the manifest and audit trail.
 
 Each case represents one outfit. Its collage can combine the current Reddit
 appearance, qualified earlier wearers, same-post angles, and an exact-garment

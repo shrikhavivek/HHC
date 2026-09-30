@@ -486,6 +486,22 @@ textarea, input { border-radius: 0; }
 textarea:focus, input:focus { border-color: rgba(124,23,56,.5); box-shadow: 0 0 0 3px rgba(124,23,56,.07); }
 .modal-note { border-radius: 0; background: #eee7dc; }
 .modal-note svg { color: var(--wine); }
+.source-intake-modal { width: min(650px,100%); }
+.source-url-intake { margin-top: 16px; }
+.source-url-intake > label:first-child { margin-top: 0; }
+.source-support-list { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+.source-support-list span { padding: 4px 6px; color: #746866; border: 1px solid rgba(35,24,27,.1); background: #f2ece3; font-size: 6px; font-weight: 750; letter-spacing: .06em; text-transform: uppercase; }
+.source-context-hints, .manual-reddit-intake { margin-top: 13px; border: 1px solid rgba(35,24,27,.12); background: #fffdf8; }
+.source-context-hints > summary, .manual-reddit-intake > summary { min-height: 48px; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 11px 13px; cursor: pointer; list-style: none; }
+.source-context-hints > summary::-webkit-details-marker, .manual-reddit-intake > summary::-webkit-details-marker { display: none; }
+.source-context-hints > summary span, .manual-reddit-intake > summary span { color: var(--wine); font: 600 17px "Cormorant Garamond", Georgia, serif; }
+.source-context-hints > summary small, .manual-reddit-intake > summary small { color: #958986; font-size: 6px; line-height: 1.4; text-align: right; }
+.source-context-hints[open] > summary, .manual-reddit-intake[open] > summary { border-bottom: 1px solid rgba(35,24,27,.1); background: #f4ece2; }
+.source-context-hints > div, .manual-reddit-intake > form { padding: 0 13px 13px; }
+.source-context-hints textarea, .manual-reddit-intake textarea { min-height: 76px; }
+.manual-reddit-intake { margin-top: 18px; background: transparent; }
+.manual-reddit-intake footer { margin-top: 14px; }
+.source-url-intake footer .primary svg { flex: 0 0 auto; }
 .toast { right: 28px; bottom: 28px; border-radius: 0; background: #1a1316; box-shadow: 0 25px 60px rgba(28,16,20,.35); }
 .toast svg { color: #d7a0b3; }
 
@@ -701,6 +717,8 @@ textarea:focus, input:focus { border-color: rgba(124,23,56,.5); box-shadow: 0 0 
 .global-search button { width: 24px; height: 24px; display: grid; place-items: center; padding: 0; color: #8a7f7d; border: 0; background: transparent; cursor: pointer; }
 .command-actions { display: flex; align-items: center; justify-content: flex-end; gap: 9px; }
 .command-actions button:disabled { opacity: .5; cursor: wait; }
+.source-import-button { min-height: 40px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 0 12px; color: var(--wine); border: 1px solid rgba(124,23,56,.2); background: rgba(255,253,248,.72); cursor: pointer; font-size: 7px; font-weight: 750; letter-spacing: .07em; text-transform: uppercase; white-space: nowrap; }
+.source-import-button:hover { color: #fff; border-color: var(--wine); background: var(--wine); }
 
 .studio-hero { margin-top: 0; }
 .studio-hero .header-rail { padding-top: 19px; }
@@ -792,11 +810,13 @@ button:disabled { opacity: .52; cursor: not-allowed !important; transform: none 
   .studio-content { padding: 0 10px 86px; }
   .command-bar { min-height: 62px; margin: 0 -10px; padding: 0 10px; gap: 8px; }
   .global-search { min-width: 0; }.global-search kbd { display: none; }.command-actions { gap: 4px; }.command-actions .icon-button { width: 39px; height: 39px; }
+  .source-import-button { width: 39px; min-height: 39px; padding: 0; }.source-import-button span { display: none; }
   .studio-hero .header-rail { padding-top: 15px; }.studio-hero .hero-row { align-items: flex-end; }.studio-hero .hero-row h1 { font-size: 45px; }.hero-seal { width: 65px; height: 76px; }.hero-seal span { font-size: 28px; }.hero-seal small { font-size: 5px; }
   .rights-hero { align-items: flex-start; flex-direction: column; }.rights-hero > a { width: 100%; justify-content: center; }
   .rights-summary, .rights-notice, .rights-grid { margin-left: 15px; margin-right: 15px; }.rights-grid { padding: 0; }
   .rights-card { grid-template-columns: 105px minmax(0,1fr); }.rights-image { min-height: 158px; }.rights-image img { height: 140px; }
   .collage-backdrop { padding: 8px; }.collage-result-modal { max-height: calc(100vh - 16px); }.collage-result-modal > header { padding: 18px; }.collage-result-modal header h2 { font-size: 28px; }.collage-result-frame { padding: 10px; }.collage-result-modal > footer { align-items: stretch; flex-direction: column; padding: 12px 16px; }.collage-result-modal > footer > div { display: grid; grid-template-columns: 1fr 1fr; }.collage-result-modal footer a { width: 100%; }
+  .source-context-hints > summary, .manual-reddit-intake > summary { align-items: flex-start; flex-direction: column; gap: 3px; }.source-context-hints > summary small, .manual-reddit-intake > summary small { text-align: left; }
 }
 
 /* Source-safe collage editor */
@@ -812,13 +832,13 @@ button:disabled { opacity: .52; cursor: not-allowed !important; transform: none 
 .collage-editor-body { min-height: 0; flex: 1 1 auto; display: grid; grid-template-columns: minmax(500px,1.2fr) minmax(320px,.8fr); overflow: hidden; }
 .selected-panel-list, .available-panel-list { min-height: 0; display: flex; flex-direction: column; padding: 20px 22px; }
 .selected-panel-list { border-right: 1px solid rgba(35,24,27,.1); }
-.available-panel-list { background: #f1e9de; }
+.available-panel-list { overflow-y: auto; background: #f1e9de; scrollbar-width: thin; scrollbar-color: rgba(124,23,56,.25) transparent; }
 .editor-section-heading { min-height: 39px; flex: 0 0 auto; display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
 .editor-section-heading h3 { margin: 3px 0 0; font: 600 22px/1 "Cormorant Garamond", Georgia, serif; }
 .editor-section-heading > button { padding: 7px 9px; color: var(--wine); border: 1px solid rgba(124,23,56,.18); background: transparent; cursor: pointer; font-size: 6px; font-weight: 750; letter-spacing: .06em; text-transform: uppercase; }
 .editor-section-heading > button:hover { background: #fff; }
 .editor-section-heading > span { min-width: 25px; padding: 5px 7px; color: #fff; border-radius: 20px; background: var(--wine); font-size: 7px; text-align: center; }
-.panel-sort-list, .available-panel-grid { min-height: 0; overflow: auto; padding-right: 4px; scrollbar-width: thin; scrollbar-color: rgba(124,23,56,.25) transparent; }
+.panel-sort-list, .available-panel-grid { min-height: 0; flex: 1 1 auto; overflow: auto; padding-right: 4px; scrollbar-width: thin; scrollbar-color: rgba(124,23,56,.25) transparent; }
 .panel-sort-list { display: flex; flex-direction: column; gap: 7px; }
 .panel-sort-card { min-height: 88px; display: grid; grid-template-columns: 31px 66px minmax(0,1fr) auto; align-items: center; gap: 11px; padding: 7px 9px; border: 1px solid rgba(35,24,27,.11); background: #fffdf8; transition: .18s ease; }
 .panel-sort-card:hover { border-color: rgba(124,23,56,.25); box-shadow: 0 8px 22px rgba(61,35,42,.06); }
@@ -931,6 +951,80 @@ button:disabled { opacity: .52; cursor: not-allowed !important; transform: none 
 .category-editor button.active { color: #fff; background: var(--wine); }
 .asset-editor_upload .asset-tile-image > span { background: rgba(49,93,118,.92); }
 
+/* Reversible collage colour controls */
+.collage-filter-panel { flex: 0 0 auto; margin: 0 0 10px; border: 1px solid rgba(49,93,118,.2); background: #f8fbfb; }
+.collage-filter-panel summary { min-height: 48px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; cursor: pointer; list-style: none; }
+.collage-filter-panel summary::-webkit-details-marker { display: none; }
+.collage-filter-panel summary > span { display: inline-flex; align-items: center; gap: 7px; color: #315d76; }
+.collage-filter-panel summary b { font: 600 16px "Cormorant Garamond", Georgia, serif; }
+.collage-filter-panel summary small { color: #71858f; font-size: 5px; font-weight: 750; letter-spacing: .07em; text-align: right; text-transform: uppercase; }
+.collage-filter-panel[open] summary { border-bottom: 1px solid rgba(35,24,27,.09); background: #eaf1f2; }
+.collage-filter-content { padding: 11px; }
+.collage-filter-content > p { margin: 8px 0 0; color: #7d8a8e; font-size: 5px; line-height: 1.45; }
+.collage-filter-preview { height: 96px; margin-bottom: 10px; overflow: hidden; border: 1px solid rgba(35,24,27,.1); background: #20191b; }
+.collage-filter-preview img { width: 100%; height: 100%; display: block; object-fit: cover; }
+.image-adjustment-controls { display: grid; gap: 9px; }
+.filter-presets { display: grid; grid-template-columns: repeat(5,minmax(0,1fr)); gap: 3px; }
+.filter-presets button { min-width: 0; min-height: 27px; padding: 4px 2px; overflow: hidden; color: #776a68; border: 1px solid rgba(35,24,27,.11); background: #fff; cursor: pointer; font-size: 5px; font-weight: 750; letter-spacing: .035em; text-overflow: ellipsis; text-transform: uppercase; }
+.filter-presets button:hover, .filter-presets button.active { color: #fff; border-color: var(--wine); background: var(--wine); }
+.image-adjustment-ranges { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px 10px; }
+.image-adjustment-ranges label { min-width: 0; display: grid; grid-template-columns: minmax(0,1fr); gap: 4px; color: #756865; font-size: 6px; font-weight: 700; }
+.image-adjustment-ranges label > span { display: flex; justify-content: space-between; gap: 5px; }.image-adjustment-ranges b { color: var(--wine); }
+.image-adjustment-ranges input { width: 100%; height: 4px; margin: 2px 0; padding: 0; accent-color: var(--wine); cursor: ew-resize; }
+
+/* Free-transform HHC watermark */
+.watermark-editor-panel { flex: 0 0 auto; margin: 0 0 10px; border: 1px solid rgba(124,23,56,.2); background: #fffaf3; }
+.watermark-editor-panel summary { min-height: 48px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; cursor: pointer; list-style: none; }
+.watermark-editor-panel summary::-webkit-details-marker { display: none; }
+.watermark-editor-panel summary > span { display: inline-flex; align-items: center; gap: 7px; color: var(--wine); }
+.watermark-editor-panel summary b { font: 600 16px "Cormorant Garamond", Georgia, serif; }
+.watermark-editor-panel summary small { color: #857875; font-size: 5px; font-weight: 750; letter-spacing: .07em; text-align: right; text-transform: uppercase; }
+.watermark-editor-panel[open] { max-height: min(58vh,540px); overflow: auto; scrollbar-width: thin; scrollbar-color: rgba(124,23,56,.25) transparent; }
+.watermark-editor-panel[open] summary { position: sticky; z-index: 8; top: 0; border-bottom: 1px solid rgba(35,24,27,.09); background: #f5ebe2; }
+.watermark-editor-content { padding: 11px; }
+.watermark-toolbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 9px; }
+.watermark-toolbar strong { display: block; color: #35292c; font: 600 16px/1.05 "Cormorant Garamond", Georgia, serif; }
+.watermark-toolbar span { display: block; margin-top: 3px; color: #887b78; font-size: 6px; line-height: 1.4; }
+.watermark-toolbar > div:last-child { display: flex; flex: 0 0 auto; gap: 4px; }
+.watermark-toolbar button { min-height: 28px; padding: 5px 7px; color: var(--wine); border: 1px solid rgba(124,23,56,.2); background: #fff; cursor: pointer; font-size: 5px; font-weight: 750; letter-spacing: .05em; text-transform: uppercase; }
+.watermark-toolbar button.active { color: #fff; border-color: var(--wine); background: var(--wine); }
+.watermark-stage-shell { min-height: 190px; display: flex; align-items: center; justify-content: center; padding: 12px; overflow: hidden; background-color: #171113; background-image: linear-gradient(45deg,rgba(255,255,255,.04) 25%,transparent 25%),linear-gradient(-45deg,rgba(255,255,255,.04) 25%,transparent 25%),linear-gradient(45deg,transparent 75%,rgba(255,255,255,.04) 75%),linear-gradient(-45deg,transparent 75%,rgba(255,255,255,.04) 75%); background-position: 0 0,0 8px,8px -8px,-8px 0; background-size: 16px 16px; }
+.watermark-stage { position: relative; overflow: hidden; max-width: 100%; outline: 1px solid rgba(255,255,255,.3); background: #2c2527; box-shadow: 0 14px 34px rgba(0,0,0,.38); touch-action: none; user-select: none; }
+.watermark-stage.is-move { cursor: grabbing; }.watermark-stage.is-resize-both { cursor: nwse-resize; }.watermark-stage.is-resize-x { cursor: ew-resize; }.watermark-stage.is-resize-y { cursor: ns-resize; }.watermark-stage.is-rotate { cursor: grabbing; }
+.watermark-collage-preview { width: 100%; height: 100%; display: block; object-fit: fill; pointer-events: none; user-select: none; }
+.watermark-preview-missing { position: absolute; inset: 0; display: grid; place-items: center; padding: 18px; color: #dacbd0; font-size: 7px; line-height: 1.5; text-align: center; }
+.watermark-overlay { position: absolute; z-index: 3; display: block; border: 1px dashed rgba(255,255,255,.95); box-shadow: 0 0 0 1px rgba(42,16,26,.55),0 6px 18px rgba(0,0,0,.22); cursor: move; line-height: 0; transform-origin: center; touch-action: none; }
+.watermark-overlay:focus-visible { outline: 3px solid #f3a8c3; outline-offset: 4px; }
+.watermark-overlay.is-disabled { border-color: rgba(255,255,255,.56); }
+.watermark-overlay > img { width: 100%; height: 100%; display: block; object-fit: fill; pointer-events: none; user-select: none; }
+.watermark-resize-handle { position: absolute; z-index: 5; width: 12px; height: 12px; display: block; border: 2px solid #fff; border-radius: 50%; background: var(--wine); box-shadow: 0 2px 7px rgba(0,0,0,.45); }
+.watermark-resize-nw { top: 0; left: 0; cursor: nwse-resize; transform: translate(-50%,-50%); }.watermark-resize-ne { top: 0; right: 0; cursor: nesw-resize; transform: translate(50%,-50%); }
+.watermark-resize-se { right: 0; bottom: 0; cursor: nwse-resize; transform: translate(50%,50%); }.watermark-resize-sw { bottom: 0; left: 0; cursor: nesw-resize; transform: translate(-50%,50%); }
+.watermark-resize-edge { width: 10px; height: 10px; background: #315d76; }
+.watermark-resize-n { top: 0; left: 50%; cursor: ns-resize; transform: translate(-50%,-50%); }.watermark-resize-s { bottom: 0; left: 50%; cursor: ns-resize; transform: translate(-50%,50%); }
+.watermark-resize-e { top: 50%; right: 0; cursor: ew-resize; transform: translate(50%,-50%); }.watermark-resize-w { top: 50%; left: 0; cursor: ew-resize; transform: translate(-50%,-50%); }
+.watermark-rotate-line { position: absolute; bottom: 100%; left: 50%; width: 1px; height: 24px; display: block; background: rgba(255,255,255,.85); transform: translateX(-50%); pointer-events: none; }
+.watermark-rotate-handle { position: absolute; z-index: 6; bottom: calc(100% + 19px); left: 50%; width: 22px; height: 22px; display: grid; place-items: center; padding: 0; color: var(--wine); border: 2px solid #fff; border-radius: 50%; background: #fff; box-shadow: 0 3px 8px rgba(0,0,0,.4); cursor: grab; transform: translateX(-50%); }
+.watermark-controls { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 9px; margin-top: 10px; }
+.watermark-controls label { min-width: 0; display: grid; gap: 5px; color: #6f6260; font-size: 6px; font-weight: 700; }
+.watermark-controls label > span { display: flex; justify-content: space-between; gap: 5px; }.watermark-controls b { color: var(--wine); }
+.watermark-controls input { width: 100%; height: 4px; margin: 2px 0; padding: 0; accent-color: var(--wine); cursor: ew-resize; }
+.watermark-filter-section { margin-top: 11px; padding-top: 10px; border-top: 1px solid rgba(35,24,27,.1); }
+.watermark-filter-section > div:first-child { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.watermark-filter-section > div:first-child small { color: #918481; font-size: 5px; font-weight: 750; letter-spacing: .07em; text-transform: uppercase; }
+.watermark-filter-section > div:first-child strong { color: #443538; font: 600 15px "Cormorant Garamond", Georgia, serif; }
+.watermark-position-readout { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+.watermark-position-readout span { padding: 4px 6px; color: #756865; background: #efe5da; font-size: 5px; font-weight: 750; letter-spacing: .05em; text-transform: uppercase; }
+.watermark-position-readout span:last-child { margin-left: auto; color: #fff; background: var(--wine); }
+.watermark-empty { display: grid; justify-items: center; gap: 4px; padding: 17px 10px; color: #8d7d7a; border: 1px dashed rgba(124,23,56,.22); text-align: center; }
+.watermark-empty svg { color: var(--wine); }.watermark-empty strong { color: #3a2e30; font: 600 18px "Cormorant Garamond", Georgia, serif; }.watermark-empty p { margin: 0; font-size: 6px; line-height: 1.45; }
+.watermark-upload-form { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: end; gap: 7px; margin-top: 9px; }
+.watermark-upload-form label { min-width: 0; display: grid; gap: 4px; color: #6f6462; font-size: 6px; font-weight: 750; letter-spacing: .06em; text-transform: uppercase; }
+.watermark-upload-form input { min-width: 0; height: 34px; padding: 6px; border: 1px solid rgba(35,24,27,.13); background: #fff; color: #3b3032; font-size: 6px; text-transform: none; }
+.watermark-upload-form button { min-height: 34px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 0 9px; color: #fff; border: 0; background: var(--wine); cursor: pointer; font-size: 6px; font-weight: 750; letter-spacing: .06em; text-transform: uppercase; }
+.watermark-upload-form button:disabled { opacity: .55; cursor: wait; }
+.watermark-note { overflow: visible !important; margin: 8px 0 0 !important; color: #918481 !important; font-size: 5px !important; line-height: 1.45; text-overflow: clip !important; white-space: normal !important; }
+
 /* Editor image uploads */
 .editor-upload-panel { flex: 0 0 auto; margin: 0 0 10px; border: 1px solid rgba(124,23,56,.18); background: #fffaf3; }
 .editor-upload-panel summary { min-height: 48px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; cursor: pointer; list-style: none; }
@@ -960,4 +1054,8 @@ button:disabled { opacity: .52; cursor: not-allowed !important; transform: none 
   .review-heading { align-items: flex-start; }.review-heading-actions { align-items: flex-end; }
   .category-editor > small { display: none; }.category-editor button { min-height: 29px; padding: 0 7px; }
   .upload-form-row { grid-template-columns: 1fr; }
+  .watermark-toolbar { flex-direction: column; }.watermark-toolbar > div:last-child { width: 100%; }.watermark-toolbar button { flex: 1; }
+  .watermark-controls { grid-template-columns: 1fr; }
+  .image-adjustment-ranges { grid-template-columns: 1fr; }
+  .watermark-upload-form { grid-template-columns: 1fr; }
 }

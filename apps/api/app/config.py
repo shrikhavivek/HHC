@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     reddit_source_mode: str = "manual"
     reddit_subreddit: str = "BollywoodFashion"
     reddit_user_agent: str = "hhc-daily-drafts/2.0 (contact: admin@highheelconfidential.com)"
+    source_import_user_agent: str = "Mozilla/5.0 (compatible; HHCEditorialImporter/1.0; +https://www.highheelconfidential.com)"
+    public_import_allowed_domains: str = "instagram.com,threads.net,facebook.com,fb.watch,x.com,twitter.com,t.co,pinterest.com,pin.it,tiktok.com,youtube.com,youtu.be,reddit.com"
     serpapi_key: str = ""
     designer_reference_search_enabled: bool = True
     daily_automation_enabled: bool = False

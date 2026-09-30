@@ -24,6 +24,7 @@ from .assets import CURRENT_MATCHER_VERSION, build_render_assets
 from .collage import render_bundle
 from .designer_search import find_official_designer_reference
 from .models import AuditEvent, Candidate, Case, Collage, Decision, JobRun
+from .public_sources import DuplicatePublicSourceError, PublicSourceError, download_public_images, inspect_public_post, normalized_published_date
 
 
 BLOCKED_TITLE_PREFIXES = ("[request]", "id this", "who is", "weekly thread")
@@ -643,7 +644,12 @@ def _visual_similarity(left_path: str, right_path: str, media_dir: str) -> float
 def _historical_matches(db: Session, case: Case, media_dir: str, limit: int = 3) -> list[tuple[Case, float, float, float, dict]]:
     if _canonical(case.designer) in UNKNOWN_VALUES:
         return []
-    archive = db.scalars(select(Case).where(Case.id != case.id, Case.source_type == "reddit_rss")).all()
+    archive = db.scalars(
+        select(Case).where(
+            Case.id != case.id,
+            Case.source_type.in_(("reddit_rss", "public_post_url")),
+        )
+    ).all()
     current_tokens = _tokens(case)
     scored: list[tuple[Case, float, float, float, dict]] = []
     for prior in archive:
@@ -674,6 +680,10 @@ def _historical_matches(db: Session, case: Case, media_dir: str, limit: int = 3)
 
 
 def _collage_assets(post: dict, downloaded: list[str], outfit: dict, retrieved_at: str) -> list[dict]:
+    publisher = post.get("publisher") or f"r/BollywoodFashion (u/{post['author']})"
+    credit = post.get("credit") or "Original photographer/agency credit requires confirmation"
+    source_kind = post.get("source_kind") or "reddit_source"
+    notes = post.get("asset_notes") or "Automatically extracted from the same Reddit post and always included in its collage."
     return [
         {
             "id": f"current-angle-{index}",
@@ -683,16 +693,19 @@ def _collage_assets(post: dict, downloaded: list[str], outfit: dict, retrieved_a
             "designer": outfit["designer"],
             "image_path": image_path,
             "source_url": post["permalink"],
-            "publisher": f"r/BollywoodFashion (u/{post['author']})",
-            "credit": "Original photographer/agency credit requires confirmation",
+            "publisher": publisher,
+            "credit": credit,
             "retrieved_at": retrieved_at,
             "rights_status": "editorial_review_required",
             "source_grade": "D",
             "official_source": False,
+            "verified_source": False,
+            "source_kind": source_kind,
+            "image_source_url": post.get("image_urls", [])[index - 1] if len(post.get("image_urls", [])) >= index else "",
             "exact_match": True,
             "include_in_collage": True,
             "fallback_only": False,
-            "notes": "Automatically extracted from the same Reddit post and always included in its collage.",
+            "notes": notes,
         }
         for index, image_path in enumerate(downloaded[1:], start=2)
     ]
@@ -1008,6 +1021,10 @@ def _add_matches(db: Session, case: Case, media_dir: str) -> list[Candidate]:
         if prior.permalink in existing_urls:
             continue
         same_person = _canonical(case.celebrity) == _canonical(prior.celebrity)
+        prior_extraction = prior.extraction if isinstance(prior.extraction, dict) else {}
+        prior_publisher = prior_extraction.get("source_publisher") or (
+            "r/BollywoodFashion archive" if prior.source_type == "reddit_rss" else "Editor-imported public post"
+        )
         candidate = Candidate(
             case_id=case.id,
             person=prior.celebrity,
@@ -1022,7 +1039,7 @@ def _add_matches(db: Session, case: Case, media_dir: str) -> list[Candidate]:
             rights_status="editorial_review_required",
             evidence=[
                 {
-                    "publisher": "r/BollywoodFashion archive",
+                    "publisher": prior_publisher,
                     "url": prior.permalink,
                     "grade": "D",
                     "quote": prior.source_title,
@@ -1166,6 +1183,140 @@ def research_case_automation(db: Session, case: Case, settings, static_dir: str)
         raise AutomationError(str(exc)) from exc
 
 
+@_serialized
+def import_public_post_automation(db: Session, payload: dict, settings, static_dir: str) -> dict:
+    """Create and research one editor-supplied public social post."""
+    created_files: list[Path] = []
+    try:
+        source = inspect_public_post(
+            str(payload["source_url"]),
+            user_agent=settings.source_import_user_agent,
+            allowed_domains=settings.public_import_allowed_domains,
+        )
+        existing = db.scalar(
+            select(Case).where(
+                (Case.permalink == source["permalink"])
+                | (Case.external_id == source["post_id"])
+            )
+        )
+        if existing:
+            raise DuplicatePublicSourceError(f"This public post is already in the research desk as case {existing.id}")
+
+        valid_urls, downloaded, created_files = download_public_images(
+            source["image_urls"],
+            media_dir=settings.media_dir,
+            user_agent=settings.source_import_user_agent,
+            referer=source["permalink"],
+        )
+        if not downloaded:
+            raise PublicSourceError(
+                "The post was found, but no public image was large enough to use. Upload the images manually if the platform blocks media access."
+            )
+
+        title_hint = _clean_text_hint(payload.get("title_hint"), 500)
+        description_hint = _clean_text_hint(payload.get("description_hint"), 3000)
+        title = title_hint or _clean_text_hint(source.get("title"), 500) or f"{source['platform']} fashion post"
+        description = _clean_text_hint(source.get("description"), 5000)
+        if description_hint and description_hint.casefold() not in description.casefold():
+            description = _clean_text_hint(f"{description} {description_hint}", 5000)
+        outfit = parse_outfit(title, description)
+        for payload_key, outfit_key in (("celebrity", "celebrity"), ("designer", "designer"), ("event_name", "event")):
+            override = _clean_text_hint(payload.get(payload_key), 240 if payload_key == "event_name" else 180)
+            if override:
+                outfit[outfit_key] = override
+
+        retrieved_at = datetime.now(timezone.utc).isoformat()
+        post = {
+            **source,
+            "image_urls": valid_urls,
+            "publisher": source["publisher"],
+            "credit": f"{source['publisher']} / original photographer or agency requires confirmation",
+            "source_kind": f"editor_import_{_canonical(source['platform']).replace(' ', '_')}",
+            "asset_notes": "Extracted from an editor-supplied public post URL. Outfit identity, credit, and publication rights require review.",
+        }
+        known_designer = _canonical(outfit["designer"]) not in UNKNOWN_VALUES
+        extraction = {
+            "automated": False,
+            "editor_imported": True,
+            "provider": "public_post_url",
+            "source_platform": source["platform"],
+            "source_publisher": source["publisher"],
+            "source_author": source.get("author") or "",
+            "retrieved_at": retrieved_at,
+            "search_basis": {"title": title, "description": description},
+            "source_image_urls": valid_urls,
+            "gallery_expanded": len(downloaded) > 1,
+            "collage_assets": _collage_assets(post, downloaded, outfit, retrieved_at),
+            "collage_layout_version": COLLAGE_LAYOUT_VERSION,
+            "designer_reference": {"status": "pending", "rule": "Official sources only; no placeholder is inserted."},
+            "import_policy": {
+                "public_url_only": True,
+                "login_bypass": False,
+                "rights_review_required": True,
+            },
+        }
+        case = Case(
+            source_type="public_post_url",
+            external_id=source["post_id"],
+            permalink=source["permalink"],
+            source_title=title,
+            source_body=description,
+            celebrity=outfit["celebrity"],
+            designer=outfit["designer"],
+            event_name=outfit["event"],
+            event_date=normalized_published_date(source.get("published")),
+            status="review_ready" if known_designer else "context_review",
+            match_type="source_only",
+            confidence=0.8 if known_designer else 0.5,
+            risk_level="medium",
+            base_image=downloaded[0],
+            extraction=extraction,
+            demo_data=False,
+        )
+        db.add(case)
+        db.flush()
+        research = _research_existing_case(db, case, settings, static_dir)
+        panel_count = int(case.extraction.get("automatic_collage", {}).get("panels", len(downloaded)))
+        db.add(AuditEvent(
+            entity_type="case",
+            entity_id=case.id,
+            action="public_source_imported",
+            actor=str(payload.get("editor_id") or "editor@atelier")[:120],
+            detail={
+                "source": source["permalink"],
+                "platform": source["platform"],
+                "source_image_count": len(downloaded),
+                "candidate_count": research.get("matches", 0),
+                "public_url_only": True,
+            },
+        ))
+        db.commit()
+        return {
+            "case_id": case.id,
+            "platform": source["platform"],
+            "source_title": title,
+            "source_image_count": len(downloaded),
+            "asset_count": panel_count,
+            "matches": research.get("matches", 0),
+            "preview_url": f"/outputs/case-{case.id}/collage.webp",
+            "bundle_url": f"/api/cases/{case.id}/bundle",
+        }
+    except PublicSourceError:
+        db.rollback()
+        for path in created_files:
+            path.unlink(missing_ok=True)
+        raise
+    except Exception as exc:
+        db.rollback()
+        for path in created_files:
+            path.unlink(missing_ok=True)
+        raise AutomationError(f"Public post import failed: {exc}") from exc
+
+
+def _clean_text_hint(value, maximum: int) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()[:maximum]
+
+
 def _saved_panel_ids(case: Case) -> list[str] | None:
     extraction = case.extraction if isinstance(case.extraction, dict) else {}
     edit = extraction.get("collage_edit")
@@ -1186,6 +1337,22 @@ def _saved_panel_options(case: Case) -> dict[str, dict] | None:
         if isinstance(panel_id, str) and isinstance(value, dict)
     }
     return options or None
+
+
+def _saved_watermark(case: Case) -> dict | None:
+    extraction = case.extraction if isinstance(case.extraction, dict) else {}
+    edit = extraction.get("collage_edit")
+    if not isinstance(edit, dict) or not isinstance(edit.get("watermark"), dict):
+        return None
+    return edit["watermark"]
+
+
+def _saved_collage_adjustments(case: Case) -> dict | None:
+    extraction = case.extraction if isinstance(case.extraction, dict) else {}
+    edit = extraction.get("collage_edit")
+    if not isinstance(edit, dict) or not isinstance(edit.get("collage_adjustments"), dict):
+        return None
+    return edit["collage_adjustments"]
 
 
 def render_draft_collage(
@@ -1236,6 +1403,8 @@ def render_draft_collage(
         include_automation_matches=True,
         panel_ids=_saved_panel_ids(case),
         panel_options=_saved_panel_options(case),
+        collage_adjustments=_saved_collage_adjustments(case),
+        watermark_options=_saved_watermark(case),
     )
     collage = Collage(case_id=case.id, decision_id=decision.id, image_path=image_path, manifest_path=manifest_path, bundle_path=bundle_path)
     db.add(collage)

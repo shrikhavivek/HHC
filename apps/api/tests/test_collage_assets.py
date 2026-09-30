@@ -1,9 +1,11 @@
+import io
 import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from app.assets import build_panel_catalog, build_render_assets, default_panel_ids, normalize_case_assets
 from app.collage import render_bundle
+from app.editor_uploads import store_watermark_image
 from PIL import Image
 
 
@@ -167,6 +169,7 @@ def test_rendered_bundle_contains_today_and_verified_original_panels(tmp_path):
     assert manifest["border_px"] == 0
     assert [item["role"] for item in manifest["assets"]] == ["current_primary", "designer_reference"]
     assert (tmp_path / "output" / "case-case-1" / "collage.webp").is_file()
+    assert (tmp_path / "output" / "case-case-1" / "collage-base.webp").is_file()
     assert open(bundle_path, "rb").read(2) == b"PK"
 
 
@@ -282,3 +285,113 @@ def test_manual_crop_rectangle_keeps_only_the_selected_source_area(tmp_path):
         assert collage.size == (1200, 2000)
         assert collage.getpixel((collage.width // 2, collage.height // 2)) == (0, 0, 255)
         assert collage.getpixel((20, collage.height // 2)) == (0, 0, 255)
+
+
+def test_watermark_transform_is_rendered_and_recorded_without_changing_base_preview(tmp_path):
+    static_dir = tmp_path / "static"
+    media_dir = tmp_path / "media"
+    watermark_dir = media_dir / "watermarks"
+    static_dir.mkdir()
+    watermark_dir.mkdir(parents=True)
+    Image.new("RGB", (600, 900), "#7c1738").save(static_dir / "look-1.png")
+    logo = Image.new("RGBA", (300, 90), (0, 0, 0, 0))
+    logo.paste((0, 255, 0, 255), (0, 0, 300, 90))
+    logo.save(watermark_dir / "hhc.webp", "WEBP", lossless=True)
+    logo.close()
+
+    case = _case([])
+    decision = SimpleNamespace(id="decision-watermark", decision="editor_draft", reason="Apply client brand mark")
+    _, manifest_path, _ = render_bundle(
+        str(tmp_path / "output"),
+        str(static_dir),
+        case,
+        [],
+        decision,
+        media_dir=str(media_dir),
+        panel_ids=["current-primary"],
+        watermark_options={
+            "enabled": True,
+            "asset_id": "watermark-hhc",
+            "image_path": "/media-files/watermarks/hhc.webp",
+            "center_x": 0.5,
+            "center_y": 0.5,
+            "width": 0.25,
+            "height": 0.1,
+            "rotation_degrees": 0,
+            "opacity": 0.5,
+        },
+    )
+
+    manifest = json.loads(open(manifest_path, encoding="utf-8").read())
+    assert manifest["watermark_applied"] is True
+    assert manifest["watermark"]["asset_id"] == "watermark-hhc"
+    assert manifest["watermark"]["rendered_width_px"] == 300
+    assert manifest["watermark"]["rendered_height_px"] == 180
+    assert manifest["watermark"]["height"] == 0.1
+    assert manifest["watermark"]["opacity"] == 0.5
+    bundle_dir = tmp_path / "output" / "case-case-1"
+    with Image.open(bundle_dir / "collage-base.webp") as base:
+        base_pixel = base.convert("RGB").getpixel((base.width // 2, base.height // 2))
+        assert base_pixel[0] > 80 and base_pixel[1] < 80
+    with Image.open(bundle_dir / "collage.png") as rendered:
+        red, green, blue = rendered.getpixel((rendered.width // 2, rendered.height // 2))
+        assert red < 75
+        assert green > 125
+        assert blue < 40
+
+
+def test_collage_image_adjustments_are_rendered_and_recorded(tmp_path):
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    Image.new("RGB", (600, 900), (120, 80, 40)).save(static_dir / "look-1.png")
+    case = _case([])
+    decision = SimpleNamespace(id="decision-filter", decision="editor_draft", reason="Tune complete collage")
+
+    _, manifest_path, _ = render_bundle(
+        str(tmp_path / "output"),
+        str(static_dir),
+        case,
+        [],
+        decision,
+        panel_ids=["current-primary"],
+        collage_adjustments={
+            "brightness": 0.5,
+            "contrast": 1,
+            "saturation": 1,
+            "grayscale": 0,
+        },
+    )
+
+    manifest = json.loads(open(manifest_path, encoding="utf-8").read())
+    assert manifest["collage_adjustments"] == {
+        "brightness": 0.5,
+        "contrast": 1.0,
+        "saturation": 1.0,
+        "grayscale": 0.0,
+    }
+    with Image.open(tmp_path / "output" / "case-case-1" / "collage-source.webp") as source:
+        red, green, blue = source.convert("RGB").getpixel((source.width // 2, source.height // 2))
+        assert 115 <= red <= 125
+        assert 75 <= green <= 85
+        assert 35 <= blue <= 45
+    with Image.open(tmp_path / "output" / "case-case-1" / "collage-base.webp") as base:
+        red, green, blue = base.convert("RGB").getpixel((base.width // 2, base.height // 2))
+        assert 55 <= red <= 65
+        assert 35 <= green <= 45
+        assert 15 <= blue <= 25
+
+
+def test_watermark_upload_preserves_transparency(tmp_path):
+    source = Image.new("RGBA", (240, 80), (0, 0, 0, 0))
+    source.paste((255, 255, 255, 255), (40, 20, 200, 60))
+    payload = io.BytesIO()
+    source.save(payload, "PNG")
+    source.close()
+
+    path, metadata = store_watermark_image(payload.getvalue(), str(tmp_path / "media"), "watermark-test123")
+
+    assert path == "/media-files/watermarks/watermark-test123.webp"
+    assert metadata["has_transparency"] is True
+    with Image.open(tmp_path / "media" / "watermarks" / "watermark-test123.webp") as stored:
+        assert stored.mode == "RGBA"
+        assert stored.getpixel((0, 0))[3] == 0

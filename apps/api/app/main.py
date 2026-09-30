@@ -14,14 +14,15 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 from .assets import build_panel_catalog, build_render_assets, default_panel_ids, normalize_case_assets
-from .automation import AutomationError, MATCHER_VERSION, migrate_legacy_matcher_outputs, render_draft_collage, research_case_automation, run_daily_automation
+from .automation import AutomationError, MATCHER_VERSION, import_public_post_automation, migrate_legacy_matcher_outputs, render_draft_collage, research_case_automation, run_daily_automation
 from .collage import ensure_demo_images, render_bundle
 from .config import get_settings
 from .database import Base, SessionLocal, engine, get_db
-from .editor_uploads import MAX_UPLOAD_BYTES, UploadValidationError, store_editor_image
+from .editor_uploads import MAX_UPLOAD_BYTES, MAX_WATERMARK_UPLOAD_BYTES, UploadValidationError, store_editor_image, store_watermark_image
 from .fashion_category import case_fashion_category
 from .models import AuditEvent, Candidate, Case, Collage, Decision, JobRun
-from .schemas import CollageEditInput, CollageInput, DecisionInput, FashionCategoryInput, ManualIntake
+from .public_sources import DuplicatePublicSourceError, PublicSourceError
+from .schemas import CollageEditInput, CollageInput, DecisionInput, FashionCategoryInput, ManualIntake, SourceUrlIntake
 from .seed import seed_database
 
 
@@ -48,6 +49,31 @@ def _visible_candidate(candidate: Candidate) -> bool:
     return automation.get("matcher_version") == MATCHER_VERSION
 
 
+def _watermark_editor_state(extraction: dict, edit: dict) -> tuple[dict | None, dict | None]:
+    asset = extraction.get("watermark_asset")
+    if not isinstance(asset, dict) or not isinstance(asset.get("image_path"), str):
+        return None, None
+    raw = edit.get("watermark") if isinstance(edit.get("watermark"), dict) else {}
+    watermark = {
+        "enabled": bool(raw.get("enabled", True)),
+        "asset_id": asset.get("id"),
+        "image_path": asset["image_path"],
+        "center_x": raw.get("center_x", 0.82),
+        "center_y": raw.get("center_y", 0.9),
+        "width": raw.get("width", 0.2),
+        "height": raw.get("height"),
+        "rotation_degrees": raw.get("rotation_degrees", 0),
+        "opacity": raw.get("opacity", 0.72),
+        "adjustments": raw.get("adjustments") if isinstance(raw.get("adjustments"), dict) else {
+            "brightness": 1.0,
+            "contrast": 1.0,
+            "saturation": 1.0,
+            "grayscale": 0.0,
+        },
+    }
+    return asset, watermark
+
+
 def case_json(case: Case, detail=False):
     data = {
         "id": case.id, "title": case.source_title, "body": case.source_body, "permalink": case.permalink,
@@ -70,6 +96,7 @@ def case_json(case: Case, detail=False):
         edit = extraction.get("collage_edit") if isinstance(extraction.get("collage_edit"), dict) else {}
         saved = edit.get("panel_ids") if isinstance(edit.get("panel_ids"), list) else None
         saved_options = edit.get("panel_options") if isinstance(edit.get("panel_options"), dict) else {}
+        watermark_asset, watermark = _watermark_editor_state(extraction, edit)
         available_ids = {str(item["id"]) for item in catalog}
         selected = [str(item) for item in saved or defaults if str(item) in available_ids]
         data["collage_editor"] = {
@@ -81,7 +108,15 @@ def case_json(case: Case, detail=False):
                 for panel_id, value in saved_options.items()
                 if str(panel_id) in available_ids and isinstance(value, dict)
             },
-            "customized": bool(saved),
+            "collage_adjustments": edit.get("collage_adjustments") if isinstance(edit.get("collage_adjustments"), dict) else {
+                "brightness": 1.0,
+                "contrast": 1.0,
+                "saturation": 1.0,
+                "grayscale": 0.0,
+            },
+            "watermark_asset": watermark_asset,
+            "watermark": watermark,
+            "customized": bool(saved or watermark),
             "updated_at": edit.get("updated_at"),
             "editor_id": edit.get("editor_id"),
         }
@@ -218,9 +253,14 @@ def get_case(case_id: str, db: Session = Depends(get_db)):
         raise HTTPException(404, "Case not found")
     data = case_json(case, detail=True)
     collage = db.scalar(select(Collage).where(Collage.case_id == case_id).order_by(Collage.created_at.desc()))
+    preview_url = f"/outputs/case-{case.id}/collage.webp"
+    base_preview_path = Path(settings.output_dir) / f"case-{case.id}" / "collage-base.webp"
+    source_preview_path = Path(settings.output_dir) / f"case-{case.id}" / "collage-source.webp"
     data["latest_collage"] = None if not collage else {
         "id": collage.id,
-        "preview_url": f"/outputs/case-{case.id}/collage.webp",
+        "preview_url": preview_url,
+        "base_preview_url": f"/outputs/case-{case.id}/collage-base.webp" if base_preview_path.is_file() else preview_url,
+        "source_preview_url": f"/outputs/case-{case.id}/collage-source.webp" if source_preview_path.is_file() else (f"/outputs/case-{case.id}/collage-base.webp" if base_preview_path.is_file() else preview_url),
         "bundle_url": f"/api/cases/{case.id}/bundle",
         "created_at": collage.created_at.isoformat(),
     }
@@ -240,6 +280,23 @@ def manual_intake(payload: ManualIntake, db: Session = Depends(get_db)):
     db.add(AuditEvent(entity_type="case", entity_id=case.id, action="manual_intake", actor="editor", detail={"source": str(payload.reddit_url)}))
     db.commit()
     return case_json(case)
+
+
+@app.post("/api/intake/source-url", status_code=201, dependencies=[Depends(require_editor)])
+def source_url_intake(payload: SourceUrlIntake, db: Session = Depends(get_db)):
+    try:
+        return import_public_post_automation(
+            db,
+            payload.model_dump(mode="json"),
+            settings,
+            STATIC_DIR,
+        )
+    except DuplicatePublicSourceError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except PublicSourceError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except AutomationError as exc:
+        raise HTTPException(502, str(exc)) from exc
 
 
 @app.post("/api/cases/{case_id}/fashion-category", dependencies=[Depends(require_editor)])
@@ -266,8 +323,8 @@ def queue_research(case_id: str, db: Session = Depends(get_db)):
     case = db.scalar(select(Case).where(Case.id == case_id).options(selectinload(Case.candidates)))
     if not case:
         raise HTTPException(404, "Case not found")
-    if case.source_type != "reddit_rss":
-        raise HTTPException(422, "Automated archive research requires a live Reddit case")
+    if case.source_type not in {"reddit_rss", "public_post_url"}:
+        raise HTTPException(422, "Automated archive research requires a live Reddit or imported public-post case")
     try:
         return {"status": "completed", **research_case_automation(db, case, settings, STATIC_DIR)}
     except AutomationError as exc:
@@ -317,6 +374,8 @@ def create_collage(case_id: str, payload: CollageInput, db: Session = Depends(ge
     edit = extraction.get("collage_edit") if isinstance(extraction.get("collage_edit"), dict) else {}
     saved_panel_ids = [str(item) for item in edit.get("panel_ids", [])] if isinstance(edit.get("panel_ids"), list) else None
     saved_panel_options = edit.get("panel_options") if isinstance(edit.get("panel_options"), dict) else None
+    saved_collage_adjustments = edit.get("collage_adjustments") if isinstance(edit.get("collage_adjustments"), dict) else None
+    saved_watermark = edit.get("watermark") if isinstance(edit.get("watermark"), dict) else None
     render_assets = build_render_assets(case, approved_candidates, panel_ids=saved_panel_ids)
     if len(render_assets) < 2:
         raise HTTPException(422, "The outfit needs another approved historical, current-angle, or official designer image")
@@ -330,6 +389,8 @@ def create_collage(case_id: str, payload: CollageInput, db: Session = Depends(ge
             media_dir=settings.media_dir,
             panel_ids=saved_panel_ids,
             panel_options=saved_panel_options,
+            collage_adjustments=saved_collage_adjustments,
+            watermark_options=saved_watermark,
         )
     except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(422, str(exc)) from exc
@@ -338,7 +399,7 @@ def create_collage(case_id: str, payload: CollageInput, db: Session = Depends(ge
     db.flush()
     db.add(AuditEvent(entity_type="case", entity_id=case.id, action="collage_generated", actor=decision.editor_id, detail={"collage_id": record.id, "asset_count": len(render_assets), "candidate_ids": [item.id for item in approved_candidates], "custom_layout": bool(saved_panel_ids)}))
     db.commit()
-    return {"id": record.id, "preview_url": f"/outputs/case-{case.id}/collage.webp", "bundle_url": f"/api/cases/{case.id}/bundle", "asset_count": len(render_assets)}
+    return {"id": record.id, "preview_url": f"/outputs/case-{case.id}/collage.webp", "base_preview_url": f"/outputs/case-{case.id}/collage-base.webp", "source_preview_url": f"/outputs/case-{case.id}/collage-source.webp", "bundle_url": f"/api/cases/{case.id}/bundle", "asset_count": len(render_assets)}
 
 
 @app.post("/api/cases/{case_id}/collage/assets", status_code=201, dependencies=[Depends(require_editor)])
@@ -430,6 +491,87 @@ async def upload_collage_asset(
     return {"case_id": case.id, "asset": normalized}
 
 
+@app.post("/api/cases/{case_id}/collage/watermark", status_code=201, dependencies=[Depends(require_editor)])
+async def upload_collage_watermark(
+    case_id: str,
+    image: UploadFile = File(...),
+    editor_id: str = Form("editor@atelier"),
+    db: Session = Depends(get_db),
+):
+    case = db.get(Case, case_id)
+    if not case:
+        raise HTTPException(404, "Case not found")
+    editor_id = editor_id.strip()
+    if len(editor_id) < 2 or len(editor_id) > 120:
+        raise HTTPException(422, "Editor identifier must be between 2 and 120 characters")
+
+    try:
+        content = await image.read(MAX_WATERMARK_UPLOAD_BYTES + 1)
+    finally:
+        await image.close()
+    file_key = f"watermark-{uuid.uuid4().hex}"
+    try:
+        image_path, image_metadata = store_watermark_image(content, settings.media_dir, file_key)
+    except UploadValidationError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+    uploaded_at = datetime.now(timezone.utc).isoformat()
+    asset_id = f"watermark-{uuid.uuid4().hex[:16]}"
+    watermark_asset = {
+        "id": asset_id,
+        "image_path": image_path,
+        "original_filename": Path(image.filename or "watermark").name[:180],
+        "metadata": image_metadata,
+        "uploaded_at": uploaded_at,
+        "editor_id": editor_id,
+    }
+    extraction = case.extraction if isinstance(case.extraction, dict) else {}
+    previous_edit = extraction.get("collage_edit") if isinstance(extraction.get("collage_edit"), dict) else {}
+    previous_watermark = previous_edit.get("watermark") if isinstance(previous_edit.get("watermark"), dict) else {}
+    watermark = {
+        "enabled": True,
+        "asset_id": asset_id,
+        "image_path": image_path,
+        "center_x": previous_watermark.get("center_x", 0.82),
+        "center_y": previous_watermark.get("center_y", 0.9),
+        "width": previous_watermark.get("width", 0.2),
+        "height": previous_watermark.get("height"),
+        "rotation_degrees": previous_watermark.get("rotation_degrees", 0),
+        "opacity": previous_watermark.get("opacity", 0.72),
+        "adjustments": previous_watermark.get("adjustments") if isinstance(previous_watermark.get("adjustments"), dict) else {
+            "brightness": 1.0,
+            "contrast": 1.0,
+            "saturation": 1.0,
+            "grayscale": 0.0,
+        },
+    }
+    case.extraction = {
+        **extraction,
+        "watermark_asset": watermark_asset,
+        "collage_edit": {
+            **previous_edit,
+            "watermark": watermark,
+            "updated_at": uploaded_at,
+            "editor_id": editor_id,
+            "version": 4,
+        },
+    }
+    db.add(AuditEvent(
+        entity_type="case",
+        entity_id=case.id,
+        action="collage_watermark_uploaded",
+        actor=editor_id,
+        detail={"asset_id": asset_id, "image_path": image_path, "original_filename": watermark_asset["original_filename"]},
+    ))
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        (Path(settings.media_dir) / image_path.removeprefix("/media-files/")).unlink(missing_ok=True)
+        raise
+    return {"case_id": case.id, "asset": watermark_asset, "watermark": watermark}
+
+
 @app.post("/api/cases/{case_id}/collage/edit", dependencies=[Depends(require_editor)])
 def edit_collage(case_id: str, payload: CollageEditInput, db: Session = Depends(get_db)):
     case = db.scalar(
@@ -450,7 +592,7 @@ def edit_collage(case_id: str, payload: CollageEditInput, db: Session = Depends(
     if unknown_options:
         raise HTTPException(422, f"Layout settings reference an unselected panel: {unknown_options[0]}")
     if not any(item["role"] in {"current_primary", "current_angle"} for item in selected):
-        raise HTTPException(422, "Keep at least one image from today's Reddit post in the collage")
+        raise HTTPException(422, "Keep at least one image from the current source post in the collage")
 
     extraction = case.extraction if isinstance(case.extraction, dict) else {}
     previous = extraction.get("collage_edit") if isinstance(extraction.get("collage_edit"), dict) else {}
@@ -459,14 +601,27 @@ def edit_collage(case_id: str, payload: CollageEditInput, db: Session = Depends(
         panel_id: option.model_dump()
         for panel_id, option in payload.panel_options.items()
     }
+    watermark_asset = extraction.get("watermark_asset") if isinstance(extraction.get("watermark_asset"), dict) else None
+    if payload.watermark is not None:
+        if not watermark_asset or not isinstance(watermark_asset.get("image_path"), str):
+            raise HTTPException(422, "Upload the HHC watermark before enabling or positioning it")
+        watermark = {
+            **payload.watermark.model_dump(),
+            "asset_id": watermark_asset.get("id"),
+            "image_path": watermark_asset["image_path"],
+        }
+    else:
+        watermark = previous.get("watermark") if isinstance(previous.get("watermark"), dict) else None
     case.extraction = {
         **extraction,
         "collage_edit": {
             "panel_ids": payload.panel_ids,
             "panel_options": panel_options,
+            "collage_adjustments": payload.collage_adjustments.model_dump(),
+            "watermark": watermark,
             "updated_at": edited_at,
             "editor_id": payload.editor_id,
-            "version": 2,
+            "version": 4,
         },
     }
     try:
@@ -499,6 +654,10 @@ def edit_collage(case_id: str, payload: CollageEditInput, db: Session = Depends(
                 "previous_panel_ids": previous.get("panel_ids", []),
                 "panel_ids": payload.panel_ids,
                 "panel_options": panel_options,
+                "previous_collage_adjustments": previous.get("collage_adjustments"),
+                "collage_adjustments": payload.collage_adjustments.model_dump(),
+                "previous_watermark": previous.get("watermark"),
+                "watermark": watermark,
                 "panel_count": len(selected),
             },
         )
@@ -507,10 +666,14 @@ def edit_collage(case_id: str, payload: CollageEditInput, db: Session = Depends(
     return {
         "id": collage.id,
         "preview_url": f"/outputs/case-{case.id}/collage.webp",
+        "base_preview_url": f"/outputs/case-{case.id}/collage-base.webp",
+        "source_preview_url": f"/outputs/case-{case.id}/collage-source.webp",
         "bundle_url": f"/api/cases/{case.id}/bundle",
         "asset_count": len(selected),
         "selected_ids": payload.panel_ids,
         "panel_options": panel_options,
+        "collage_adjustments": payload.collage_adjustments.model_dump(),
+        "watermark": watermark,
         "updated_at": edited_at,
     }
 

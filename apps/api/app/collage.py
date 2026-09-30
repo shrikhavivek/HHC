@@ -155,6 +155,152 @@ def _normalized_panel_options(assets: list[dict], raw_options: dict | None) -> d
     return normalized
 
 
+def _normalized_image_adjustments(raw_options: dict | None) -> dict:
+    options = raw_options if isinstance(raw_options, dict) else {}
+    return {
+        "brightness": round(_bounded_float(options.get("brightness"), 1.0, 0.25, 2.0), 3),
+        "contrast": round(_bounded_float(options.get("contrast"), 1.0, 0.25, 2.0), 3),
+        "saturation": round(_bounded_float(options.get("saturation"), 1.0, 0.0, 2.0), 3),
+        "grayscale": round(_bounded_float(options.get("grayscale"), 0.0, 0.0, 1.0), 3),
+    }
+
+
+def _apply_image_adjustments(image: Image.Image, raw_options: dict | None) -> tuple[Image.Image, dict]:
+    """Return an adjusted copy while preserving an RGBA image's original alpha."""
+    option = _normalized_image_adjustments(raw_options)
+    alpha = image.getchannel("A") if "A" in image.getbands() else None
+    working = image.convert("RGB")
+    try:
+        for enhancer, value in (
+            (ImageEnhance.Brightness, option["brightness"]),
+            (ImageEnhance.Contrast, option["contrast"]),
+            (ImageEnhance.Color, option["saturation"]),
+        ):
+            if value == 1.0:
+                continue
+            adjusted = enhancer(working).enhance(value)
+            working.close()
+            working = adjusted
+        if option["grayscale"] > 0:
+            gray = ImageOps.grayscale(working).convert("RGB")
+            blended = Image.blend(working, gray, option["grayscale"])
+            working.close()
+            gray.close()
+            working = blended
+        if alpha is None:
+            result = working
+            working = None
+            return result, option
+        result = working.convert("RGBA")
+        result.putalpha(alpha)
+        return result, option
+    finally:
+        if working is not None:
+            working.close()
+        if alpha is not None:
+            alpha.close()
+
+
+def _normalized_watermark_options(raw_options: dict | None) -> dict | None:
+    if not isinstance(raw_options, dict):
+        return None
+    image_path = raw_options.get("image_path")
+    if not isinstance(image_path, str) or not image_path.strip():
+        return None
+    asset_id = raw_options.get("asset_id")
+    raw_height = raw_options.get("height")
+    height = None if raw_height is None else round(_bounded_float(raw_height, 0.08, 0.02, 1.0), 4)
+    return {
+        "enabled": bool(raw_options.get("enabled", True)),
+        "asset_id": str(asset_id) if asset_id else None,
+        "image_path": image_path.strip(),
+        "center_x": round(_bounded_float(raw_options.get("center_x"), 0.82, 0.0, 1.0), 4),
+        "center_y": round(_bounded_float(raw_options.get("center_y"), 0.9, 0.0, 1.0), 4),
+        "width": round(_bounded_float(raw_options.get("width"), 0.2, 0.05, 1.0), 4),
+        "height": height,
+        "rotation_degrees": round(_bounded_float(raw_options.get("rotation_degrees"), 0.0, -180.0, 180.0), 2),
+        "opacity": round(_bounded_float(raw_options.get("opacity"), 0.72, 0.05, 1.0), 3),
+        "adjustments": _normalized_image_adjustments(raw_options.get("adjustments")),
+    }
+
+
+def _apply_watermark(
+    canvas: Image.Image,
+    static_dir: str,
+    media_dir: str | None,
+    raw_options: dict | None,
+) -> tuple[Image.Image, dict | None]:
+    option = _normalized_watermark_options(raw_options)
+    if not option:
+        return canvas, None
+    manifest = {**option, "applied": False}
+    if not option["enabled"]:
+        return canvas, manifest
+
+    source = _open_local_asset(static_dir, option["image_path"], media_dir)
+    try:
+        logo = ImageOps.exif_transpose(source).convert("RGBA")
+    finally:
+        source.close()
+    try:
+        adjusted_logo, adjustments = _apply_image_adjustments(logo, option["adjustments"])
+    finally:
+        logo.close()
+    option["adjustments"] = adjustments
+    manifest["adjustments"] = adjustments
+    try:
+        target_width = max(1, round(canvas.width * option["width"]))
+        target_height = (
+            max(1, round(canvas.height * option["height"]))
+            if option["height"] is not None
+            else max(1, round(adjusted_logo.height * target_width / max(1, adjusted_logo.width)))
+        )
+        resized = adjusted_logo.resize((target_width, target_height), Image.Resampling.LANCZOS)
+    finally:
+        adjusted_logo.close()
+    try:
+        alpha = resized.getchannel("A").point(lambda value: round(value * option["opacity"]))
+        resized.putalpha(alpha)
+        alpha.close()
+        # CSS rotates positive angles clockwise; Pillow uses positive angles
+        # counter-clockwise, so invert the sign for preview/render parity.
+        rotated = resized.rotate(
+            -option["rotation_degrees"],
+            resample=Image.Resampling.BICUBIC,
+            expand=True,
+            fillcolor=(0, 0, 0, 0),
+        )
+    finally:
+        resized.close()
+
+    try:
+        left = round(option["center_x"] * canvas.width - rotated.width / 2)
+        top = round(option["center_y"] * canvas.height - rotated.height / 2)
+        layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+        # Copy RGBA directly onto the transparent layer. Passing the logo as
+        # both source and mask would multiply its alpha a second time and make
+        # the rendered opacity weaker than the editor preview.
+        layer.paste(rotated, (left, top))
+        base = canvas.convert("RGBA")
+        try:
+            rendered = Image.alpha_composite(base, layer).convert("RGB")
+        finally:
+            base.close()
+            layer.close()
+        manifest.update({
+            "applied": True,
+            "rendered_width_px": target_width,
+            "rendered_height_px": target_height,
+            "rotated_width_px": rotated.width,
+            "rotated_height_px": rotated.height,
+            "left_px": left,
+            "top_px": top,
+        })
+        return rendered, manifest
+    finally:
+        rotated.close()
+
+
 def _crop_rectangle(image: Image.Image, rect: dict) -> Image.Image:
     left = max(0, min(image.width - 1, round(rect["x"] * image.width)))
     top = max(0, min(image.height - 1, round(rect["y"] * image.height)))
@@ -213,6 +359,8 @@ def render_bundle(
     include_automation_matches: bool = False,
     panel_ids: Sequence[str] | None = None,
     panel_options: dict[str, dict] | None = None,
+    collage_adjustments: dict | None = None,
+    watermark_options: dict | None = None,
 ):
     bundle_dir = Path(output_root) / f"case-{case.id}"
     bundle_dir.mkdir(parents=True, exist_ok=True)
@@ -275,9 +423,18 @@ def render_bundle(
         for image in opened:
             image.close()
 
+    source_webp_path = bundle_dir / "collage-source.webp"
+    canvas.save(source_webp_path, quality=90, method=6)
+    adjusted_canvas, normalized_collage_adjustments = _apply_image_adjustments(canvas, collage_adjustments)
+    canvas.close()
+    canvas = adjusted_canvas
+    base_webp_path = bundle_dir / "collage-base.webp"
+    canvas.save(base_webp_path, quality=90, method=6)
+    rendered_canvas, watermark_manifest = _apply_watermark(canvas, static_dir, media_dir, watermark_options)
+
     png_path, webp_path = bundle_dir / "collage.png", bundle_dir / "collage.webp"
-    canvas.save(png_path, optimize=True)
-    canvas.save(webp_path, quality=92, method=6)
+    rendered_canvas.save(png_path, optimize=True)
+    rendered_canvas.save(webp_path, quality=92, method=6)
 
     manifest = {
         "case_id": case.id,
@@ -290,6 +447,11 @@ def render_bundle(
         "layout": "edge_to_edge_justified",
         "editor_customized": panel_ids is not None,
         "panel_options": normalized_options,
+        "collage_adjustments": normalized_collage_adjustments,
+        "watermark_applied": bool(watermark_manifest and watermark_manifest.get("applied")),
+        "watermark": watermark_manifest,
+        "source_preview_file": source_webp_path.name,
+        "base_preview_file": base_webp_path.name,
         "spacing_px": 0,
         "border_px": 0,
     }
@@ -311,10 +473,47 @@ def render_bundle(
                 "",
             ]
         )
+    if watermark_manifest:
+        watermark_height = watermark_manifest.get("height")
+        watermark_adjustments = watermark_manifest.get("adjustments", {})
+        watermark_height_label = (
+            "Natural aspect ratio"
+            if watermark_height is None
+            else f"{round(float(watermark_height) * 100)}% of canvas"
+        )
+        source_lines.extend(
+            [
+                "## HHC watermark",
+                f"- Applied: {'Yes' if watermark_manifest.get('applied') else 'No'}",
+                f"- Brand asset: {watermark_manifest.get('asset_id') or 'Not recorded'}",
+                f"- Opacity: {round(float(watermark_manifest.get('opacity', 0)) * 100)}%",
+                f"- Rotation: {watermark_manifest.get('rotation_degrees', 0)} degrees",
+                f"- Width: {round(float(watermark_manifest.get('width', 0)) * 100)}% of canvas",
+                f"- Height: {watermark_height_label}",
+                f"- Brightness: {round(float(watermark_adjustments.get('brightness', 1)) * 100)}%",
+                f"- Contrast: {round(float(watermark_adjustments.get('contrast', 1)) * 100)}%",
+                f"- Saturation: {round(float(watermark_adjustments.get('saturation', 1)) * 100)}%",
+                f"- Grayscale: {round(float(watermark_adjustments.get('grayscale', 0)) * 100)}%",
+                "",
+            ]
+        )
+    source_lines.extend(
+        [
+            "## Collage image adjustments",
+            f"- Brightness: {round(normalized_collage_adjustments['brightness'] * 100)}%",
+            f"- Contrast: {round(normalized_collage_adjustments['contrast'] * 100)}%",
+            f"- Saturation: {round(normalized_collage_adjustments['saturation'] * 100)}%",
+            f"- Grayscale: {round(normalized_collage_adjustments['grayscale'] * 100)}%",
+            "",
+        ]
+    )
     (bundle_dir / "sources.md").write_text("\n".join(source_lines), encoding="utf-8")
 
     zip_path = bundle_dir / "bundle.zip"
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as archive:
-        for name in ["collage.png", "collage.webp", "manifest.json", "sources.md"]:
+        for name in ["collage.png", "collage.webp", "collage-source.webp", "manifest.json", "sources.md"]:
             archive.write(bundle_dir / name, arcname=name)
+    if rendered_canvas is not canvas:
+        rendered_canvas.close()
+    canvas.close()
     return str(webp_path), str(manifest_path), str(zip_path)

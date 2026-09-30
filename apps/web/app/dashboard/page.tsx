@@ -96,11 +96,40 @@ type PanelLayoutOption = {
   zoom: number;
   crop_rect?: CropRectangle | null;
 };
+type ImageAdjustments = {
+  brightness: number;
+  contrast: number;
+  saturation: number;
+  grayscale: number;
+};
+type WatermarkAsset = {
+  id: string;
+  image_path: string;
+  original_filename: string;
+  metadata?: { output_width?: number; output_height?: number; has_transparency?: boolean };
+  uploaded_at?: string;
+  editor_id?: string;
+};
+type WatermarkLayout = {
+  enabled: boolean;
+  asset_id: string;
+  image_path: string;
+  center_x: number;
+  center_y: number;
+  width: number;
+  height: number | null;
+  rotation_degrees: number;
+  opacity: number;
+  adjustments: ImageAdjustments;
+};
 type CollageEditor = {
   panels: CollagePanel[];
   default_ids: string[];
   selected_ids: string[];
   panel_options: Record<string, PanelLayoutOption>;
+  collage_adjustments: ImageAdjustments;
+  watermark_asset?: WatermarkAsset | null;
+  watermark?: WatermarkLayout | null;
   customized: boolean;
   updated_at?: string;
   editor_id?: string;
@@ -112,7 +141,7 @@ type CaseDetail = CaseSummary & {
   assets: OutfitAsset[];
   candidates: Candidate[];
   collage_editor: CollageEditor;
-  latest_collage?: { id: string; preview_url: string; bundle_url: string; created_at: string } | null;
+  latest_collage?: { id: string; preview_url: string; base_preview_url?: string; source_preview_url?: string; bundle_url: string; created_at: string } | null;
 };
 type CollageResult = { previewUrl: string; bundleUrl: string; assetCount: number };
 
@@ -120,6 +149,8 @@ const REVIEW_STATUSES = new Set(["review_ready", "context_review", "needs_resear
 const ARCHIVE_STATUSES = new Set(["approved", "rejected", "auto_rejected", "similar_not_same"]);
 const DEFAULT_CROP_RECT: CropRectangle = { x: 0, y: 0, width: 1, height: 1 };
 const DEFAULT_PANEL_OPTION: PanelLayoutOption = { width_scale: 1, crop_mode: "fit", focal_x: .5, focal_y: .5, zoom: 1, crop_rect: DEFAULT_CROP_RECT };
+const DEFAULT_IMAGE_ADJUSTMENTS: ImageAdjustments = { brightness: 1, contrast: 1, saturation: 1, grayscale: 0 };
+const DEFAULT_WATERMARK_LAYOUT = { enabled: true, center_x: .82, center_y: .9, width: .2, height: null, rotation_degrees: 0, opacity: .72, adjustments: DEFAULT_IMAGE_ADJUSTMENTS };
 
 const VIEW_META: Record<WorkspaceView, { label: string; short: string; title: string; accent: string; description: string; listTitle: string; listKicker: string }> = {
   today: {
@@ -425,6 +456,214 @@ function ManualCropEditor({ image, label, option, onChange }: {
   </div>;
 }
 
+const IMAGE_FILTER_PRESETS: { label: string; value: ImageAdjustments }[] = [
+  { label: "Original", value: DEFAULT_IMAGE_ADJUSTMENTS },
+  { label: "Editorial", value: { brightness: 1.04, contrast: 1.1, saturation: 1.04, grayscale: 0 } },
+  { label: "Soft", value: { brightness: 1.08, contrast: .88, saturation: .9, grayscale: 0 } },
+  { label: "Vivid", value: { brightness: 1.02, contrast: 1.14, saturation: 1.22, grayscale: 0 } },
+  { label: "Mono", value: { brightness: 1, contrast: 1.08, saturation: 0, grayscale: 1 } },
+];
+
+function imageFilter(value: ImageAdjustments) {
+  return `brightness(${value.brightness}) contrast(${value.contrast}) saturate(${value.saturation}) grayscale(${value.grayscale})`;
+}
+
+function ImageAdjustmentControls({ value, onChange }: { value: ImageAdjustments; onChange: (next: ImageAdjustments) => void }) {
+  const update = (patch: Partial<ImageAdjustments>) => onChange({ ...value, ...patch });
+  const percentage = (key: keyof ImageAdjustments) => Math.round(value[key] * 100);
+  return <div className="image-adjustment-controls">
+    <div className="filter-presets" aria-label="Image filter presets">
+      {IMAGE_FILTER_PRESETS.map(preset => <button
+        type="button"
+        key={preset.label}
+        className={Object.keys(preset.value).every(key => Math.abs(value[key as keyof ImageAdjustments] - preset.value[key as keyof ImageAdjustments]) < .001) ? "active" : ""}
+        onClick={() => onChange({ ...preset.value })}
+      >{preset.label}</button>)}
+    </div>
+    <div className="image-adjustment-ranges">
+      <label><span>Brightness <b>{percentage("brightness")}%</b></span><input type="range" min="25" max="200" step="1" value={percentage("brightness")} onChange={event => update({ brightness: Number(event.target.value) / 100 })}/></label>
+      <label><span>Contrast <b>{percentage("contrast")}%</b></span><input type="range" min="25" max="200" step="1" value={percentage("contrast")} onChange={event => update({ contrast: Number(event.target.value) / 100 })}/></label>
+      <label><span>Colour <b>{percentage("saturation")}%</b></span><input type="range" min="0" max="200" step="1" value={percentage("saturation")} onChange={event => update({ saturation: Number(event.target.value) / 100 })}/></label>
+      <label><span>B&amp;W <b>{percentage("grayscale")}%</b></span><input type="range" min="0" max="100" step="1" value={percentage("grayscale")} onChange={event => update({ grayscale: Number(event.target.value) / 100 })}/></label>
+    </div>
+  </div>;
+}
+
+function CollageAdjustmentEditor({ baseImage, adjustments, onChange }: {
+  baseImage: string;
+  adjustments: ImageAdjustments;
+  onChange: (next: ImageAdjustments) => void;
+}) {
+  return <details className="collage-filter-panel" open>
+    <summary><span><Icon name="tune" size={15}/><b>Collage colour &amp; filters</b></span><small>Applied below the watermark</small></summary>
+    <div className="collage-filter-content">
+      {baseImage && <div className="collage-filter-preview"><img src={baseImage} alt="Filtered collage preview" style={{ filter: imageFilter(adjustments) }}/></div>}
+      <ImageAdjustmentControls value={adjustments} onChange={onChange}/>
+      <p>These settings affect the complete collage while leaving every source file unchanged.</p>
+    </div>
+  </details>;
+}
+
+function WatermarkEditor({ baseImage, collageAdjustments, watermark, onChange, onUpload, uploadBusy }: {
+  baseImage: string;
+  collageAdjustments: ImageAdjustments;
+  watermark: WatermarkLayout | null;
+  onChange: (watermark: WatermarkLayout) => void;
+  onUpload: (event: FormEvent<HTMLFormElement>) => void;
+  uploadBusy: boolean;
+}) {
+  const stageRef = useRef<HTMLDivElement>(null);
+  const [stageAspect, setStageAspect] = useState(1);
+  const [logoAspect, setLogoAspect] = useState(3);
+  const [expanded, setExpanded] = useState(true);
+  type DragMode = "move" | "resize-both" | "resize-x" | "resize-y" | "rotate";
+  const [dragging, setDragging] = useState<DragMode | null>(null);
+  const drag = useRef<{
+    pointerId: number;
+    mode: DragMode;
+    startX: number;
+    startY: number;
+    startAngle: number;
+    watermark: WatermarkLayout;
+  } | null>(null);
+  const limit = (value: number, lower: number, upper: number) => Math.max(lower, Math.min(upper, value));
+  const round = (value: number, places = 4) => Number(value.toFixed(places));
+  const normalizeAngle = (value: number) => ((value + 180) % 360 + 360) % 360 - 180;
+  const watermarkAdjustments = { ...DEFAULT_IMAGE_ADJUSTMENTS, ...(watermark?.adjustments || {}) };
+  const effectiveHeight = watermark
+    ? limit(watermark.height ?? watermark.width * stageAspect / Math.max(.01, logoAspect), .02, 1)
+    : .08;
+
+  function update(patch: Partial<WatermarkLayout>) {
+    if (!watermark) return;
+    onChange({ ...watermark, ...patch });
+  }
+
+  function beginDrag(event: React.PointerEvent<HTMLElement>, mode: DragMode) {
+    if (!watermark || (event.pointerType === "mouse" && event.button !== 0)) return;
+    const stage = stageRef.current;
+    if (!stage) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const bounds = stage.getBoundingClientRect();
+    const pointerX = event.clientX - bounds.left;
+    const pointerY = event.clientY - bounds.top;
+    const centerX = watermark.center_x * bounds.width;
+    const centerY = watermark.center_y * bounds.height;
+    drag.current = {
+      pointerId: event.pointerId,
+      mode,
+      startX: pointerX / Math.max(1, bounds.width),
+      startY: pointerY / Math.max(1, bounds.height),
+      startAngle: Math.atan2(pointerY - centerY, pointerX - centerX),
+      watermark: { ...watermark, height: effectiveHeight, adjustments: watermarkAdjustments },
+    };
+    stage.setPointerCapture(event.pointerId);
+    setDragging(mode);
+  }
+
+  function transformWatermark(event: React.PointerEvent<HTMLDivElement>) {
+    const origin = drag.current;
+    const stage = stageRef.current;
+    if (!origin || origin.pointerId !== event.pointerId || !stage) return;
+    const bounds = stage.getBoundingClientRect();
+    const pointerX = event.clientX - bounds.left;
+    const pointerY = event.clientY - bounds.top;
+    if (origin.mode === "move") {
+      const nextX = origin.watermark.center_x + pointerX / Math.max(1, bounds.width) - origin.startX;
+      const nextY = origin.watermark.center_y + pointerY / Math.max(1, bounds.height) - origin.startY;
+      update({ center_x: round(limit(nextX, 0, 1)), center_y: round(limit(nextY, 0, 1)) });
+      return;
+    }
+    const centerX = origin.watermark.center_x * bounds.width;
+    const centerY = origin.watermark.center_y * bounds.height;
+    if (origin.mode.startsWith("resize")) {
+      const rotation = origin.watermark.rotation_degrees * Math.PI / 180;
+      const dx = pointerX - centerX;
+      const dy = pointerY - centerY;
+      const localX = dx * Math.cos(rotation) + dy * Math.sin(rotation);
+      const localY = -dx * Math.sin(rotation) + dy * Math.cos(rotation);
+      const patch: Partial<WatermarkLayout> = {};
+      if (origin.mode !== "resize-y") patch.width = round(limit(2 * Math.abs(localX) / Math.max(1, bounds.width), .05, 1));
+      if (origin.mode !== "resize-x") patch.height = round(limit(2 * Math.abs(localY) / Math.max(1, bounds.height), .02, 1));
+      update(patch);
+      return;
+    }
+    const angle = Math.atan2(pointerY - centerY, pointerX - centerX);
+    const delta = (angle - origin.startAngle) * 180 / Math.PI;
+    update({ rotation_degrees: round(normalizeAngle(origin.watermark.rotation_degrees + delta), 1) });
+  }
+
+  function endDrag(event: React.PointerEvent<HTMLDivElement>) {
+    if (drag.current?.pointerId !== event.pointerId) return;
+    drag.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    setDragging(null);
+  }
+
+  function moveWithKeyboard(event: React.KeyboardEvent<HTMLDivElement>) {
+    if (!watermark) return;
+    const step = event.shiftKey ? .04 : .008;
+    if (event.key === "ArrowLeft") update({ center_x: round(limit(watermark.center_x - step, 0, 1)) });
+    else if (event.key === "ArrowRight") update({ center_x: round(limit(watermark.center_x + step, 0, 1)) });
+    else if (event.key === "ArrowUp") update({ center_y: round(limit(watermark.center_y - step, 0, 1)) });
+    else if (event.key === "ArrowDown") update({ center_y: round(limit(watermark.center_y + step, 0, 1)) });
+    else if (event.key === "[") update({ rotation_degrees: round(normalizeAngle(watermark.rotation_degrees - (event.shiftKey ? 5 : 1)), 1) });
+    else if (event.key === "]") update({ rotation_degrees: round(normalizeAngle(watermark.rotation_degrees + (event.shiftKey ? 5 : 1)), 1) });
+    else return;
+    event.preventDefault();
+  }
+
+  return <details className="watermark-editor-panel" open={expanded} onToggle={event => setExpanded(event.currentTarget.open)}>
+    <summary><span><Icon name="spark" size={15}/><b>HHC watermark</b></span><small>{watermark ? watermark.enabled ? "Visible in final render" : "Hidden from final render" : "Optional brand layer"}</small></summary>
+    <div className="watermark-editor-content">
+      {watermark ? <>
+        <div className="watermark-toolbar"><div><strong>Place the brand mark</strong><span>Drag, stretch width or height independently, rotate, and tune its appearance.</span></div><div><button type="button" className={watermark.enabled ? "active" : ""} onClick={() => update({ enabled: !watermark.enabled })}>{watermark.enabled ? "Hide watermark" : "Show watermark"}</button><button type="button" onClick={() => onChange({ ...watermark, ...DEFAULT_WATERMARK_LAYOUT, adjustments: { ...DEFAULT_IMAGE_ADJUSTMENTS } })}>Reset</button></div></div>
+        <div className="watermark-stage-shell">
+          <div
+            ref={stageRef}
+            className={`watermark-stage ${dragging ? `is-${dragging}` : ""}`}
+            style={{ width: `min(100%, ${Math.max(96, Math.min(520, Math.round(300 * stageAspect)))}px)`, aspectRatio: stageAspect }}
+            onPointerMove={transformWatermark}
+            onPointerUp={endDrag}
+            onPointerCancel={endDrag}
+          >
+            {baseImage ? <img className="watermark-collage-preview" src={baseImage} alt="Watermark-free collage preview" draggable={false} style={{ filter: imageFilter(collageAdjustments) }} onDragStart={event => event.preventDefault()} onLoad={event => { const next = event.currentTarget.naturalWidth / Math.max(1, event.currentTarget.naturalHeight); if (Number.isFinite(next) && next > 0) setStageAspect(next); }}/>: <span className="watermark-preview-missing">Save a collage once to create its positioning preview.</span>}
+            <div
+              className={`watermark-overlay ${watermark.enabled ? "" : "is-disabled"}`}
+              style={{ left: `${watermark.center_x * 100}%`, top: `${watermark.center_y * 100}%`, width: `${watermark.width * 100}%`, height: `${effectiveHeight * 100}%`, transform: `translate(-50%, -50%) rotate(${watermark.rotation_degrees}deg)` }}
+              tabIndex={0}
+              role="group"
+              aria-label="HHC watermark. Drag to move, use edge handles for width or height, corner handles for both, and the round handle to rotate."
+              onPointerDown={event => beginDrag(event, "move")}
+              onKeyDown={moveWithKeyboard}
+            >
+              <img src={asset(watermark.image_path)} alt="HHC watermark" draggable={false} style={{ opacity: watermark.enabled ? watermark.opacity : .24, filter: imageFilter(watermarkAdjustments) }} onLoad={event => { const next = event.currentTarget.naturalWidth / Math.max(1, event.currentTarget.naturalHeight); if (Number.isFinite(next) && next > 0) setLogoAspect(next); }} onDragStart={event => event.preventDefault()}/>
+              {(["nw", "ne", "se", "sw"] as const).map(handle => <span key={handle} className={`watermark-resize-handle watermark-resize-${handle}`} onPointerDown={event => beginDrag(event, "resize-both")} aria-hidden/>)}
+              {(["n", "s"] as const).map(handle => <span key={handle} className={`watermark-resize-handle watermark-resize-${handle} watermark-resize-edge`} onPointerDown={event => beginDrag(event, "resize-y")} aria-hidden/>)}
+              {(["e", "w"] as const).map(handle => <span key={handle} className={`watermark-resize-handle watermark-resize-${handle} watermark-resize-edge`} onPointerDown={event => beginDrag(event, "resize-x")} aria-hidden/>)}
+              <span className="watermark-rotate-line" aria-hidden/><button type="button" className="watermark-rotate-handle" onPointerDown={event => beginDrag(event, "rotate")} aria-label="Drag to rotate watermark"><Icon name="refresh" size={11}/></button>
+            </div>
+          </div>
+        </div>
+        <div className="watermark-controls">
+          <label><span>Width <b>{Math.round(watermark.width * 100)}%</b></span><input type="range" min="5" max="100" step="1" value={Math.round(watermark.width * 100)} onChange={event => update({ width: Number(event.target.value) / 100, height: effectiveHeight })}/></label>
+          <label><span>Height <b>{Math.round(effectiveHeight * 100)}%</b></span><input type="range" min="2" max="100" step="1" value={Math.round(effectiveHeight * 100)} onChange={event => update({ height: Number(event.target.value) / 100 })}/></label>
+          <label><span>Opacity <b>{Math.round(watermark.opacity * 100)}%</b></span><input type="range" min="5" max="100" step="1" value={Math.round(watermark.opacity * 100)} onChange={event => update({ opacity: Number(event.target.value) / 100 })}/></label>
+          <label><span>Tilt <b>{Math.round(watermark.rotation_degrees)} deg</b></span><input type="range" min="-180" max="180" step="1" value={Math.round(watermark.rotation_degrees)} onChange={event => update({ rotation_degrees: Number(event.target.value) })}/></label>
+        </div>
+        <div className="watermark-filter-section"><div><small>Watermark-only appearance</small><strong>Colour &amp; filters</strong></div><ImageAdjustmentControls value={watermarkAdjustments} onChange={adjustments => update({ adjustments })}/></div>
+        <div className="watermark-position-readout"><span>X {Math.round(watermark.center_x * 100)}%</span><span>Y {Math.round(watermark.center_y * 100)}%</span><span>W {Math.round(watermark.width * 100)}%</span><span>H {Math.round(effectiveHeight * 100)}%</span><span>{watermark.enabled ? "Included" : "Not included"}</span></div>
+      </> : <div className="watermark-empty"><Icon name="image" size={24}/><strong>Add the HHC logo or wordmark</strong><p>A transparent PNG or WebP works best. The source logo stays untouched.</p></div>}
+      <form className="watermark-upload-form" onSubmit={onUpload}>
+        <label><span>{watermark ? "Replace brand asset" : "Choose brand asset"}</span><input name="image" type="file" accept="image/png,image/webp,image/jpeg" required disabled={uploadBusy}/></label>
+        <button type="submit" disabled={uploadBusy}><Icon name={uploadBusy ? "refresh" : "upload"} size={13}/>{uploadBusy ? "Uploadingâ€¦" : watermark ? "Replace logo" : "Upload watermark"}</button>
+      </form>
+      <p className="watermark-note">Use only a client-authorized brand asset. Side handles change width, top and bottom handles change height, and corners change both. Arrow keys move precisely; [ and ] rotate.</p>
+    </div>
+  </details>;
+}
+
 function AssetBoard({ assets }: { assets: OutfitAsset[] }) {
   if (!assets.length) return null;
   return <section className="asset-board" aria-label="Additional outfit sources">
@@ -456,13 +695,14 @@ function RightsCard({ image, eyebrow, title, subtitle, status, source, exact, of
 
 function RightsWorkspace({ selected }: { selected: CaseDetail | null }) {
   if (!selected) return <div className="review-empty"><span>RD</span><h2>Select a source case</h2><p>Rights and provenance details will appear here.</p></div>;
+  const sourceName = selected.source_type === "reddit_rss" ? "Reddit" : "public post";
   const allStatuses = ["editorial_review_required", ...selected.candidates.map(item => item.rights_status), ...selected.assets.map(item => item.rights_status)];
   const blocked = allStatuses.filter(isBlocked).length;
   const official = selected.assets.filter(item => item.verified_source).length;
   return <div className="rights-workspace">
     <header className="rights-hero">
       <div><small>Rights dossier / {selected.designer}</small><h2>{selected.celebrity}</h2><p>{selected.event_name} · {selected.event_date || "Date unresolved"}</p></div>
-      <a href={selected.permalink} target="_blank" rel="noreferrer"><Icon name="external"/>Open Reddit source</a>
+      <a href={selected.permalink} target="_blank" rel="noreferrer"><Icon name="external"/>Open {sourceName} source</a>
     </header>
     <div className="rights-summary">
       <div><small>Source panels</small><strong>{allStatuses.length}</strong></div>
@@ -472,7 +712,7 @@ function RightsWorkspace({ selected }: { selected: CaseDetail | null }) {
     </div>
     <div className="rights-notice"><Icon name="shield"/><div><strong>A URL is not a publishing licence.</strong><span>Confirm photographer, agency and designer credit terms before WordPress publication.</span></div></div>
     <div className="rights-grid">
-      <RightsCard image={selected.base_image} eyebrow="Current Reddit image" title={selected.celebrity} subtitle={selected.event_name} status="editorial_review_required" source={selected.permalink} exact />
+      <RightsCard image={selected.base_image} eyebrow={`Current ${sourceName} image`} title={selected.celebrity} subtitle={selected.event_name} status="editorial_review_required" source={selected.permalink} exact />
       {selected.candidates.map(item => <RightsCard key={item.id} image={item.image_path} eyebrow="Historical candidate" title={item.person} subtitle={`${item.event_name} · Grade ${item.source_grade}`} status={item.rights_status} source={item.evidence[0]?.url || ""} exact={Boolean(item.checks.identity)} />)}
       {selected.assets.map(item => <RightsCard key={item.id} image={item.image_path} eyebrow={item.role === "designer_reference" ? "Original product look" : item.role === "editor_upload" ? "Editor upload" : "Current angle"} title={item.label} subtitle={`${item.publisher} · Grade ${item.source_grade}`} status={item.rights_status} source={item.source_url} exact={item.exact_match} official={item.verified_source} />)}
     </div>
@@ -494,6 +734,7 @@ export default function DashboardPage() {
   const [researchBusy, setResearchBusy] = useState(false);
   const [collageBusy, setCollageBusy] = useState(false);
   const [automationBusy, setAutomationBusy] = useState(false);
+  const [sourceImportBusy, setSourceImportBusy] = useState(false);
   const [decisionMode, setDecisionMode] = useState<"approved" | "rejected" | "similar_not_same" | "needs_more_research" | null>(null);
   const [reason, setReason] = useState("");
   const [showIntake, setShowIntake] = useState(false);
@@ -505,9 +746,12 @@ export default function DashboardPage() {
   const [showCollageEditor, setShowCollageEditor] = useState(false);
   const [editorPanelIds, setEditorPanelIds] = useState<string[]>([]);
   const [editorPanelOptions, setEditorPanelOptions] = useState<Record<string, PanelLayoutOption>>({});
+  const [editorCollageAdjustments, setEditorCollageAdjustments] = useState<ImageAdjustments>({ ...DEFAULT_IMAGE_ADJUSTMENTS });
+  const [editorWatermark, setEditorWatermark] = useState<WatermarkLayout | null>(null);
   const [tuningPanelId, setTuningPanelId] = useState<string | null>(null);
   const [editorBusy, setEditorBusy] = useState(false);
   const [uploadBusy, setUploadBusy] = useState(false);
+  const [watermarkBusy, setWatermarkBusy] = useState(false);
   const [categoryBusy, setCategoryBusy] = useState(false);
 
   async function openCase(id: string) {
@@ -691,6 +935,13 @@ export default function DashboardPage() {
       ? selected.collage_editor.selected_ids
       : selected.collage_editor.default_ids);
     setEditorPanelOptions(selected.collage_editor.panel_options || {});
+    setEditorCollageAdjustments({ ...DEFAULT_IMAGE_ADJUSTMENTS, ...(selected.collage_editor.collage_adjustments || {}) });
+    const savedWatermark = selected.collage_editor.watermark;
+    setEditorWatermark(savedWatermark ? {
+      ...savedWatermark,
+      height: savedWatermark.height ?? null,
+      adjustments: { ...DEFAULT_IMAGE_ADJUSTMENTS, ...(savedWatermark.adjustments || {}) },
+    } : null);
     setTuningPanelId(null);
     setShowCollageEditor(true);
   }
@@ -729,7 +980,7 @@ export default function DashboardPage() {
   }
 
   async function saveCollageEdit() {
-    if (!selected || !editorPanelIds.length) return setToast("Keep at least one current Reddit image in the collage.");
+    if (!selected || !editorPanelIds.length) return setToast("Keep at least one image from the current source post in the collage.");
     setEditorBusy(true);
     try {
       const selectedOptions = Object.fromEntries(
@@ -738,7 +989,22 @@ export default function DashboardPage() {
       const response = await fetch(`/api/backend/cases/${selected.id}/collage/edit`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ panel_ids: editorPanelIds, panel_options: selectedOptions, editor_id: "editor@atelier" }),
+        body: JSON.stringify({
+          panel_ids: editorPanelIds,
+          panel_options: selectedOptions,
+          collage_adjustments: editorCollageAdjustments,
+          watermark: editorWatermark ? {
+            enabled: editorWatermark.enabled,
+            center_x: editorWatermark.center_x,
+            center_y: editorWatermark.center_y,
+            width: editorWatermark.width,
+            height: editorWatermark.height,
+            rotation_degrees: editorWatermark.rotation_degrees,
+            opacity: editorWatermark.opacity,
+            adjustments: editorWatermark.adjustments,
+          } : null,
+          editor_id: "editor@atelier",
+        }),
       });
       const data = await response.json();
       if (!response.ok) return setToast(data.detail || "The collage edit could not be saved.");
@@ -750,7 +1016,7 @@ export default function DashboardPage() {
         bundleUrl: data.bundle_url.replace(/^\/api\//, "/api/backend/"),
         assetCount: data.asset_count,
       });
-      setToast(`Collage updated with ${data.asset_count} source-backed panel${data.asset_count === 1 ? "" : "s"}.`);
+      setToast(`Collage updated with ${data.asset_count} source-backed panel${data.asset_count === 1 ? "" : "s"}${data.watermark?.enabled ? " and the HHC watermark" : ""}.`);
       await openCase(caseId);
     } finally { setEditorBusy(false); }
   }
@@ -776,6 +1042,26 @@ export default function DashboardPage() {
     } catch {
       setToast("The image upload could not reach the research service.");
     } finally { setUploadBusy(false); }
+  }
+
+  async function uploadWatermark(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selected) return;
+    const formElement = event.currentTarget;
+    const payload = new FormData(formElement);
+    payload.set("editor_id", "editor@atelier");
+    setWatermarkBusy(true);
+    try {
+      const response = await fetch(`/api/backend/cases/${selected.id}/collage/watermark`, { method: "POST", body: payload });
+      const data = await response.json();
+      if (!response.ok) return setToast(data.detail || "The watermark could not be uploaded.");
+      setEditorWatermark(data.watermark);
+      formElement.reset();
+      await openCase(selected.id);
+      setToast("Watermark uploaded. Drag, resize or tilt it, then save and re-render.");
+    } catch {
+      setToast("The watermark upload could not reach the research service.");
+    } finally { setWatermarkBusy(false); }
   }
 
   async function updateFashionCategory(category: CaseSummary["fashion_category"]) {
@@ -813,6 +1099,40 @@ export default function DashboardPage() {
     await openCase(data.id);
   }
 
+  async function submitSourceUrl(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    const payload = { ...Object.fromEntries(form.entries()), editor_id: "editor@atelier" };
+    setSourceImportBusy(true);
+    try {
+      const response = await fetch("/api/backend/intake/source-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json();
+      if (!response.ok) return setToast(typeof data.detail === "string" ? data.detail : "The public post could not be imported.");
+      setShowIntake(false);
+      setWorkspaceView("today");
+      setFilter("all");
+      setSearch("");
+      formElement.reset();
+      await load();
+      await openCase(data.case_id);
+      setCollageResult({
+        previewUrl: `${asset(data.preview_url)}?v=${Date.now()}`,
+        bundleUrl: data.bundle_url.replace(/^\/api\//, "/api/backend/"),
+        assetCount: data.asset_count,
+      });
+      setToast(`${data.platform} post imported with ${data.source_image_count} public image${data.source_image_count === 1 ? "" : "s"}; the research collage is ready.`);
+    } catch {
+      setToast("The URL importer could not reach the research service.");
+    } finally {
+      setSourceImportBusy(false);
+    }
+  }
+
   return <main className="shell studio-shell">
     <aside className="sidebar studio-sidebar">
       <div className="brand"><span className="brand-mark">H</span><div><strong>High Heel<br/>Confidential</strong><small>Outfit intelligence studio</small></div></div>
@@ -837,17 +1157,17 @@ export default function DashboardPage() {
       <header className="command-bar">
         <div className="workspace-crumb"><span>HHC Studio</span><Icon name="arrow" size={12}/><strong>{meta.label}</strong></div>
         <div className="global-search"><Icon name="search" size={16}/><input ref={searchRef} value={search} onChange={event => setSearch(event.target.value)} placeholder="Search celebrity, designer, event…" aria-label="Search outfits"/>{search ? <button type="button" onClick={() => setSearch("")} aria-label="Clear search"><Icon name="close" size={13}/></button> : <kbd>/</kbd>}</div>
-        <div className="command-actions"><button type="button" className="icon-button" onClick={() => void load(true)} title="Refresh" disabled={refreshing}><Icon name="refresh"/></button><button type="button" className="primary" onClick={() => void runAutomation()} disabled={automationBusy}><Icon name={automationBusy ? "refresh" : "spark"}/>{automationBusy ? "Building drafts…" : "Run daily automation"}</button></div>
+        <div className="command-actions"><button type="button" className="icon-button" onClick={() => void load(true)} title="Refresh" disabled={refreshing}><Icon name="refresh"/></button><button type="button" className="source-import-button" onClick={() => setShowIntake(true)}><Icon name="link"/><span>Import post URL</span></button><button type="button" className="primary" onClick={() => void runAutomation()} disabled={automationBusy}><Icon name={automationBusy ? "refresh" : "spark"}/>{automationBusy ? "Building drafts…" : "Run daily automation"}</button></div>
       </header>
 
       <header className="editorial-header studio-hero">
         <div className="header-rail"><span>{meta.short} / {editionCode}</span><i/><span>{dateLabel}</span></div>
-        <div className="hero-row"><div><div className="eyebrow"><span/>{workspaceView === "rights" ? "Source governance" : "Curated from r/BollywoodFashion"}</div><h1>{meta.title} <em>{meta.accent}</em></h1><p>{meta.description}</p></div><div className="hero-seal"><span>{visibleCases.length.toString().padStart(2, "0")}</span><small>Visible<br/>outfits</small></div></div>
+        <div className="hero-row"><div><div className="eyebrow"><span/>{workspaceView === "rights" ? "Source governance" : "Reddit + editor-selected public posts"}</div><h1>{meta.title} <em>{meta.accent}</em></h1><p>{meta.description}</p></div><div className="hero-seal"><span>{visibleCases.length.toString().padStart(2, "0")}</span><small>Visible<br/>outfits</small></div></div>
       </header>
 
       <section className={`provider-strip ${providersLive ? "is-live" : "is-demo"}`} aria-label="Research provider status">
         <div className="provider-summary"><span className="provider-icon"><Icon name={providersLive ? "spark" : "clock"} size={17}/></span><div><small>Research environment</small><strong>{providersLive ? "Live intelligence" : "Curated demonstration"}</strong></div></div>
-        <p>{providersLive ? "Reddit discovery, title-and-description extraction, archive matching and draft collage rendering run automatically." : "The automated Reddit provider is waiting for configuration."}</p>
+        <p>{providersLive ? "Reddit discovery and editor-selected public URL imports share title-and-description extraction, archive matching and draft collage rendering." : "The automated Reddit provider is waiting for configuration; public URL intake remains editor initiated."}</p>
         <div className="provider-stages"><span className={providersLive ? "ready" : "waiting"}><i/>Reddit intake<small>{providersLive ? "Automatic" : "Waiting"}</small></span><span className={providersLive ? "ready" : "waiting"}><i/>Look extraction<small>{providersLive ? "Automatic" : "Waiting"}</small></span><span className={providersLive ? "ready" : "waiting"}><i/>Archive search<small>{providersLive ? "Local archive" : "Waiting"}</small></span><span className="ready"><i/>Collage studio<small>Automatic</small></span></div>
       </section>
 
@@ -874,16 +1194,16 @@ export default function DashboardPage() {
 
         <div className="review-panel">
           {workspaceView === "rights" ? <RightsWorkspace selected={selected}/> : !selected ? <div className="review-empty"><span>HHC</span><h2>No outfit selected</h2><p>Choose a look from the rail to open its editorial file.</p></div> : <>
-            <div className="review-heading"><div><div className="review-meta"><StatusPill status={selected.status}/><span className={`fashion-chip fashion-${selected.fashion_category}`}>{selected.fashion_category === "unclassified" ? "Content desk open" : pretty(selected.fashion_category)}</span>{selected.demo_data && <span className="demo-chip">Demonstration</span>}</div><h2>{selected.celebrity}</h2><p><b>{selected.designer}</b><i/>{selected.event_name}</p></div><div className="review-heading-actions"><div className="category-editor"><small>Content listing</small><div>{(["women", "men", "mixed"] as const).map(category => <button type="button" key={category} className={selected.fashion_category === category ? "active" : ""} onClick={() => void updateFashionCategory(category)} disabled={categoryBusy}>{category === "mixed" ? "Both" : pretty(category)}</button>)}</div></div><a className="source-link" href={selected.permalink} target="_blank" rel="noreferrer"><Icon name="external"/>Reddit source</a></div></div>
+            <div className="review-heading"><div><div className="review-meta"><StatusPill status={selected.status}/><span className={`fashion-chip fashion-${selected.fashion_category}`}>{selected.fashion_category === "unclassified" ? "Content desk open" : pretty(selected.fashion_category)}</span>{selected.demo_data && <span className="demo-chip">Demonstration</span>}</div><h2>{selected.celebrity}</h2><p><b>{selected.designer}</b><i/>{selected.event_name}</p></div><div className="review-heading-actions"><div className="category-editor"><small>Content listing</small><div>{(["women", "men", "mixed"] as const).map(category => <button type="button" key={category} className={selected.fashion_category === category ? "active" : ""} onClick={() => void updateFashionCategory(category)} disabled={categoryBusy}>{category === "mixed" ? "Both" : pretty(category)}</button>)}</div></div><a className="source-link" href={selected.permalink} target="_blank" rel="noreferrer"><Icon name="external"/>{selected.source_type === "reddit_rss" ? "Reddit source" : "Public source"}</a></div></div>
 
             {selected.latest_collage && <section className="automatic-draft-card">
               <div className="automatic-draft-image"><img src={asset(selected.latest_collage.preview_url)} alt={`Automatic collage for ${selected.celebrity}`}/><span>Generated automatically</span></div>
-              <div className="automatic-draft-copy"><small>Today’s ready-to-review output</small><h3>Single-image collage complete</h3><p>Every usable image from the Reddit post is arranged edge-to-edge in one collage, followed by the historical or exact original-outfit comparison when available.</p><div><span><Icon name="check" size={13}/>{automaticPanelCount} source panel{automaticPanelCount === 1 ? "" : "s"} in one image</span><span><Icon name="shield" size={13}/>Draft only — never auto-published</span></div><footer><button type="button" className="primary" onClick={() => setCollageResult({ previewUrl: asset(selected.latest_collage!.preview_url), bundleUrl: selected.latest_collage!.bundle_url.replace(/^\/api\//, "/api/backend/"), assetCount: automaticPanelCount })}><Icon name="eye"/>View collage</button><button type="button" className="ghost" onClick={openCollageEditor}><Icon name="edit"/>Edit collage</button><a className="ghost" href={selected.latest_collage.bundle_url.replace(/^\/api\//, "/api/backend/")} target="_blank" rel="noreferrer"><Icon name="download"/>Evidence bundle</a></footer></div>
+              <div className="automatic-draft-copy"><small>Today’s ready-to-review output</small><h3>Single-image collage complete</h3><p>Every usable image from the source post is arranged edge-to-edge in one collage, followed by the historical or exact original-outfit comparison when available.</p><div><span><Icon name="check" size={13}/>{automaticPanelCount} source panel{automaticPanelCount === 1 ? "" : "s"} in one image</span><span><Icon name="shield" size={13}/>Draft only — never auto-published</span></div><footer><button type="button" className="primary" onClick={() => setCollageResult({ previewUrl: asset(selected.latest_collage!.preview_url), bundleUrl: selected.latest_collage!.bundle_url.replace(/^\/api\//, "/api/backend/"), assetCount: automaticPanelCount })}><Icon name="eye"/>View collage</button><button type="button" className="ghost" onClick={openCollageEditor}><Icon name="edit"/>Edit collage</button><a className="ghost" href={selected.latest_collage.bundle_url.replace(/^\/api\//, "/api/backend/")} target="_blank" rel="noreferrer"><Icon name="download"/>Evidence bundle</a></footer></div>
             </section>}
 
             {!candidate && <>
               <AssetBoard assets={supplementaryAssets}/>
-              <div className="no-candidate-state"><span><Icon name="search" size={22}/></span><small>Archive discovery</small><h3>No exact historical match found yet</h3><p>This source-only collage was still created automatically. Every daily run rechecks the growing Reddit archive using the post title, description, designer attribution and image signals.</p><button type="button" className="primary" onClick={() => void runAutomation()} disabled={automationBusy}>{automationBusy ? "Checking Reddit…" : "Check for new outfits now"}</button></div>
+              <div className="no-candidate-state"><span><Icon name="search" size={22}/></span><small>Archive discovery</small><h3>No exact historical match found yet</h3><p>This source-only collage was still created automatically. Research can recheck the growing Reddit and imported-post archive using the title, description, designer attribution and image signals.</p><button type="button" className="primary" onClick={() => selected.source_type === "reddit_rss" || selected.source_type === "public_post_url" ? void queueResearch() : void runAutomation()} disabled={researchBusy || automationBusy}>{researchBusy || automationBusy ? "Checking sources…" : "Check for new outfits now"}</button></div>
             </>}
 
             {candidate && <>
@@ -908,11 +1228,21 @@ export default function DashboardPage() {
 
     {decisionMode && <div className="modal-backdrop" onMouseDown={() => setDecisionMode(null)}><section className="decision-modal" onMouseDown={event => event.stopPropagation()}><div className="modal-icon"><Icon name={decisionMode === "approved" ? "check" : decisionMode === "rejected" ? "close" : "search"}/></div><div className="modal-title"><small>Editorial action</small><h2>{pretty(decisionMode)}</h2><p>Capture the judgment behind this decision. The note becomes part of the permanent evidence trail.</p></div><label>Decision rationale<textarea autoFocus value={reason} onChange={event => setReason(event.target.value)} placeholder="Describe the source and visual evidence behind this decision…"/></label><div className="modal-note"><Icon name="shield"/><span>Approval remains blocked when identity, duplicate, source or image-rights checks fail.</span></div><footer><button type="button" className="ghost" onClick={() => setDecisionMode(null)}>Cancel</button><button type="button" className={decisionMode === "approved" ? "approve" : "primary"} onClick={() => void submitDecision()} disabled={decisionBusy}>{decisionBusy ? "Saving…" : "Save verdict"}</button></footer></section></div>}
 
-    {showIntake && <div className="modal-backdrop" onMouseDown={() => setShowIntake(false)}><form className="intake-modal" onSubmit={submitIntake} onMouseDown={event => event.stopPropagation()}><div className="modal-title"><small>Manual source intake</small><h2>Add a look to today’s edit</h2><p>Paste a Reddit post and preserve the title and description that make the outfit searchable.</p></div><label>Reddit permalink<input required name="reddit_url" type="url" placeholder="https://www.reddit.com/r/BollywoodFashion/comments/…"/></label><label>Post title<input required name="title" placeholder="Celebrity in Designer at Event"/></label><div className="form-row"><label>Celebrity<input name="celebrity" placeholder="Unresolved"/></label><label>Designer<input name="designer" placeholder="Unresolved"/></label></div><label>Event<input name="event_name" placeholder="Unresolved"/></label><label>Description<textarea name="body" placeholder="Paste the source description or add editor notes…"/></label><div className="modal-note"><Icon name="shield"/><span>This creates a Context Review case and never publishes automatically.</span></div><footer><button type="button" className="ghost" onClick={() => setShowIntake(false)}>Cancel</button><button className="primary" type="submit">Add to today’s edit</button></footer></form></div>}
+    {showIntake && <div className="modal-backdrop" onMouseDown={() => !sourceImportBusy && setShowIntake(false)}><section className="intake-modal source-intake-modal" role="dialog" aria-modal="true" aria-labelledby="source-intake-title" onMouseDown={event => event.stopPropagation()}>
+      <div className="modal-title"><small>Editor-selected source</small><h2 id="source-intake-title">Import a public fashion post</h2><p>Paste a public post URL. The studio will collect exposed title, caption and images, identify the outfit, search the archive, and create the same editable collage workflow used for Reddit.</p></div>
+      <form className="source-url-intake" onSubmit={submitSourceUrl}>
+        <label>Public post URL<input autoFocus required name="source_url" type="url" placeholder="https://www.instagram.com/p/…" disabled={sourceImportBusy}/></label>
+        <div className="source-support-list"><span>Instagram</span><span>Threads</span><span>X</span><span>Facebook</span><span>Pinterest</span><span>TikTok</span><span>YouTube</span><span>Reddit</span></div>
+        <details className="source-context-hints"><summary><span>Add optional outfit context</span><small>Useful when the caption omits a name or designer</small></summary><div><label>Searchable title<input name="title_hint" placeholder="Celebrity in Designer at Event" maxLength={500} disabled={sourceImportBusy}/></label><div className="form-row"><label>Celebrity<input name="celebrity" placeholder="Auto-detect" maxLength={180} disabled={sourceImportBusy}/></label><label>Designer<input name="designer" placeholder="Auto-detect" maxLength={180} disabled={sourceImportBusy}/></label></div><label>Event<input name="event_name" placeholder="Auto-detect" maxLength={240} disabled={sourceImportBusy}/></label><label>Extra searchable description<textarea name="description_hint" placeholder="Garment, colour, collection or designer details…" maxLength={3000} disabled={sourceImportBusy}/></label></div></details>
+        <div className="modal-note"><Icon name="shield"/><span>Public media only. Private or login-gated posts are not bypassed. Imported images remain draft-only and require credit and publication-rights review.</span></div>
+        <footer><button type="button" className="ghost" onClick={() => setShowIntake(false)} disabled={sourceImportBusy}>Cancel</button><button className="primary" type="submit" disabled={sourceImportBusy}><Icon name={sourceImportBusy ? "refresh" : "link"}/>{sourceImportBusy ? "Importing & researching…" : "Import & create collage"}</button></footer>
+      </form>
+      <details className="manual-reddit-intake"><summary><span>Manual Reddit intake</span><small>Use when automated media extraction is unavailable</small></summary><form onSubmit={submitIntake}><label>Reddit permalink<input required name="reddit_url" type="url" placeholder="https://www.reddit.com/r/BollywoodFashion/comments/…"/></label><label>Post title<input required name="title" placeholder="Celebrity in Designer at Event"/></label><div className="form-row"><label>Celebrity<input name="celebrity" placeholder="Unresolved"/></label><label>Designer<input name="designer" placeholder="Unresolved"/></label></div><label>Event<input name="event_name" placeholder="Unresolved"/></label><label>Description<textarea name="body" placeholder="Paste the source description or add editor notes…"/></label><footer><button className="ghost" type="submit">Create context-review case</button></footer></form></details>
+    </section></div>}
 
     {showCollageEditor && selected && <div className="modal-backdrop collage-editor-backdrop" onMouseDown={() => !editorBusy && setShowCollageEditor(false)}><section className="collage-editor-modal" role="dialog" aria-modal="true" aria-labelledby="collage-editor-title" onMouseDown={event => event.stopPropagation()}>
       <header><div><small>Optional manual control</small><h2 id="collage-editor-title">Edit this collage.</h2><p>Reorder, replace, resize, or crop each image. Originals stay untouched and all source metadata remains attached.</p></div><button type="button" className="modal-close" onClick={() => setShowCollageEditor(false)} disabled={editorBusy} aria-label="Close collage editor"><Icon name="close"/></button></header>
-      <div className="collage-editor-summary"><span><b>{editorSelectedPanels.length}</b> selected panels</span><span><Icon name="shield" size={13}/>Source and rights metadata stay attached</span><span>Today’s Reddit look remains required</span></div>
+      <div className="collage-editor-summary"><span><b>{editorSelectedPanels.length}</b> selected panels</span><span><Icon name="shield" size={13}/>Source and rights metadata stay attached</span><span>{editorWatermark?.enabled ? "HHC watermark ready" : "Watermark optional"}</span></div>
       <div className="collage-editor-body">
         <section className="selected-panel-list"><div className="editor-section-heading"><div><small>Final image order</small><h3>Panels in collage</h3></div><button type="button" onClick={resetCollageLayout}>Reset automatic layout</button></div>
           <div className="panel-sort-list">{editorSelectedPanels.map((panel, index) => {
@@ -927,7 +1257,7 @@ export default function DashboardPage() {
                 <button type="button" className={tuning ? "active" : ""} onClick={() => setTuningPanelId(current => current === panel.id ? null : panel.id)} aria-label={`Resize or crop ${panel.label}`} aria-expanded={tuning} title="Resize or crop"><Icon name="tune" size={15}/></button>
                 <button type="button" onClick={() => moveEditorPanel(index, -1)} disabled={index === 0} aria-label={`Move ${panel.label} up`}><Icon name="up" size={15}/></button>
                 <button type="button" onClick={() => moveEditorPanel(index, 1)} disabled={index === editorSelectedPanels.length - 1} aria-label={`Move ${panel.label} down`}><Icon name="down" size={15}/></button>
-                <button type="button" className="remove" onClick={() => { setEditorPanelIds(current => current.filter(id => id !== panel.id)); setEditorPanelOptions(current => { const next = { ...current }; delete next[panel.id]; return next; }); if (tuning) setTuningPanelId(null); }} disabled={requiredCurrent || editorSelectedPanels.length === 1} aria-label={`Remove ${panel.label}`} title={requiredCurrent ? "Keep at least one current Reddit image" : "Remove panel"}><Icon name="trash" size={15}/></button>
+                <button type="button" className="remove" onClick={() => { setEditorPanelIds(current => current.filter(id => id !== panel.id)); setEditorPanelOptions(current => { const next = { ...current }; delete next[panel.id]; return next; }); if (tuning) setTuningPanelId(null); }} disabled={requiredCurrent || editorSelectedPanels.length === 1} aria-label={`Remove ${panel.label}`} title={requiredCurrent ? "Keep at least one current source image" : "Remove panel"}><Icon name="trash" size={15}/></button>
               </div>
               {tuning && <div className="panel-tuning">
                 <div className="panel-tuning-heading"><div><small>Image layout</small><strong>Resize &amp; crop</strong></div><button type="button" onClick={() => updatePanelOption(panel.id, DEFAULT_PANEL_OPTION)}>Reset image</button></div>
@@ -939,6 +1269,19 @@ export default function DashboardPage() {
           })}</div>
         </section>
         <aside className="available-panel-list"><div className="editor-section-heading"><div><small>Replacement library</small><h3>Available images</h3></div><span>{editorAvailablePanels.length}</span></div>
+          <CollageAdjustmentEditor
+            baseImage={asset(selected.latest_collage?.source_preview_url || selected.latest_collage?.base_preview_url || selected.latest_collage?.preview_url || "")}
+            adjustments={editorCollageAdjustments}
+            onChange={setEditorCollageAdjustments}
+          />
+          <WatermarkEditor
+            baseImage={asset(selected.latest_collage?.source_preview_url || selected.latest_collage?.base_preview_url || selected.latest_collage?.preview_url || "")}
+            collageAdjustments={editorCollageAdjustments}
+            watermark={editorWatermark}
+            onChange={setEditorWatermark}
+            onUpload={uploadWatermark}
+            uploadBusy={watermarkBusy}
+          />
           <details className="editor-upload-panel">
             <summary><span><Icon name="upload" size={15}/><b>Upload your own image</b></span><small>JPEG, PNG or WebP · up to 20 MB</small></summary>
             <form onSubmit={uploadCollageImage}>

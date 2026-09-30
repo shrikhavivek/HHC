@@ -21,6 +21,16 @@ class ManualIntake(BaseModel):
         return value
 
 
+class SourceUrlIntake(BaseModel):
+    source_url: HttpUrl
+    title_hint: str = Field(default="", max_length=500)
+    description_hint: str = Field(default="", max_length=3000)
+    celebrity: str = Field(default="", max_length=180)
+    designer: str = Field(default="", max_length=180)
+    event_name: str = Field(default="", max_length=240)
+    editor_id: str = Field(default="editor@atelier", min_length=2, max_length=120)
+
+
 class DecisionInput(BaseModel):
     decision: DecisionType
     reason: str = Field(min_length=12, max_length=2000)
@@ -53,9 +63,29 @@ class PanelLayoutOption(BaseModel):
     crop_rect: CropRectangle | None = None
 
 
+class ImageAdjustments(BaseModel):
+    brightness: float = Field(default=1.0, ge=0.25, le=2.0)
+    contrast: float = Field(default=1.0, ge=0.25, le=2.0)
+    saturation: float = Field(default=1.0, ge=0.0, le=2.0)
+    grayscale: float = Field(default=0.0, ge=0.0, le=1.0)
+
+
+class WatermarkLayout(BaseModel):
+    enabled: bool = True
+    center_x: float = Field(default=0.82, ge=0, le=1)
+    center_y: float = Field(default=0.9, ge=0, le=1)
+    width: float = Field(default=0.2, ge=0.05, le=1)
+    height: float | None = Field(default=None, ge=0.02, le=1)
+    rotation_degrees: float = Field(default=0, ge=-180, le=180)
+    opacity: float = Field(default=0.72, ge=0.05, le=1)
+    adjustments: ImageAdjustments = Field(default_factory=ImageAdjustments)
+
+
 class CollageEditInput(BaseModel):
     panel_ids: list[str] = Field(min_length=1, max_length=24)
     panel_options: dict[str, PanelLayoutOption] = Field(default_factory=dict)
+    collage_adjustments: ImageAdjustments = Field(default_factory=ImageAdjustments)
+    watermark: WatermarkLayout | None = None
     editor_id: str = Field(default="editor@atelier", min_length=2, max_length=120)
 
     @field_validator("panel_ids")

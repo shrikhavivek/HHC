@@ -124,6 +124,9 @@ def build_panel_catalog(
         and item["rights_status"] not in BLOCKED_RIGHTS_STATUSES
     ]
 
+    extraction = case.extraction if isinstance(case.extraction, dict) else {}
+    source_publisher = str(extraction.get("source_publisher") or "r/BollywoodFashion source")
+    source_platform = str(extraction.get("source_platform") or "Reddit")
     panels: list[dict[str, Any]] = [
         {
             "id": "current-primary",
@@ -135,15 +138,16 @@ def build_panel_catalog(
             "date": case.event_date,
             "image_path": case.base_image,
             "source_url": case.permalink,
-            "publisher": "r/BollywoodFashion source",
-            "credit": "Original publisher/photographer credit requires editorial confirmation",
-            "retrieved_at": None,
+            "publisher": source_publisher,
+            "credit": f"{source_publisher} / original photographer or agency requires editorial confirmation",
+            "retrieved_at": extraction.get("retrieved_at"),
             "rights_status": "editorial_review_required",
             "source_grade": "D",
+            "source_kind": f"{source_platform.casefold()}_source",
         }
     ]
 
-    # Every usable photo from this Reddit post is available to the editor.
+    # Every usable photo from the current source post is available to the editor.
     for asset in current_angles:
         panels.append({**asset, "event": case.event_name, "date": case.event_date})
 
