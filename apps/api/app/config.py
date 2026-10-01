@@ -14,14 +14,18 @@ class Settings(BaseSettings):
     reddit_source_mode: str = "manual"
     reddit_subreddit: str = "BollywoodFashion"
     reddit_user_agent: str = "hhc-daily-drafts/2.0 (contact: admin@highheelconfidential.com)"
+    reddit_daily_timezone: str = "Asia/Kolkata"
+    reddit_listing_page_size: int = 100
+    reddit_listing_max_pages: int = 50
+    reddit_match_search_limit: int = 100
     source_import_user_agent: str = "Mozilla/5.0 (compatible; HHCEditorialImporter/1.0; +https://www.highheelconfidential.com)"
     public_import_allowed_domains: str = "instagram.com,threads.net,facebook.com,fb.watch,x.com,twitter.com,t.co,pinterest.com,pin.it,tiktok.com,youtube.com,youtu.be,reddit.com"
     serpapi_key: str = ""
     designer_reference_search_enabled: bool = True
     daily_automation_enabled: bool = False
-    daily_automation_limit: int = 6
-    daily_remote_search_budget: int = 2
-    daily_designer_search_budget: int = 2
+    daily_gallery_retry_budget: int = 8
+    daily_remote_search_budget: int = 8
+    daily_designer_search_budget: int = 8
     daily_automation_hour_utc: int = 3
     daily_automation_minute_utc: int = 30
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")

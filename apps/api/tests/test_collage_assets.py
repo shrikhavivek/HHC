@@ -3,7 +3,7 @@ import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
-from app.assets import build_panel_catalog, build_render_assets, default_panel_ids, normalize_case_assets
+from app.assets import CURRENT_MATCHER_VERSION, build_panel_catalog, build_render_assets, default_panel_ids, normalize_case_assets
 from app.collage import render_bundle
 from app.editor_uploads import store_watermark_image
 from PIL import Image
@@ -124,7 +124,7 @@ def test_legacy_automation_match_is_not_available_to_the_renderer():
     current = _candidate("Current Matcher Candidate")
     current.decisions = []
     current.status = "automation_selected"
-    current.checks = {"automation": {"matcher_version": 2}}
+    current.checks = {"automation": {"matcher_version": CURRENT_MATCHER_VERSION}}
 
     panels = build_panel_catalog(_case([]), [legacy, current], include_automation_matches=True)
     assert [item["id"] for item in panels] == ["current-primary", current.id]

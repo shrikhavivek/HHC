@@ -3,7 +3,7 @@ import os
 import mimetypes
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile
@@ -14,7 +14,19 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 from .assets import build_panel_catalog, build_render_assets, default_panel_ids, normalize_case_assets
-from .automation import AutomationError, MATCHER_VERSION, import_public_post_automation, migrate_legacy_matcher_outputs, render_draft_collage, research_case_automation, run_daily_automation
+from .automation import (
+    AutomationError,
+    MATCHER_VERSION,
+    case_content_eligible,
+    editorial_subject_eligibility,
+    import_public_post_automation,
+    migrate_legacy_matcher_outputs,
+    refresh_existing_case_metadata,
+    refresh_existing_content_policy,
+    render_draft_collage,
+    research_case_automation,
+    run_daily_automation,
+)
 from .collage import ensure_demo_images, render_bundle
 from .config import get_settings
 from .database import Base, SessionLocal, engine, get_db
@@ -170,6 +182,8 @@ async def lifespan(app: FastAPI):
             seed_database(db)
     with SessionLocal() as db:
         migrate_legacy_matcher_outputs(db, settings, STATIC_DIR)
+        refresh_existing_case_metadata(db)
+        refresh_existing_content_policy(db)
     scheduler = asyncio.create_task(_daily_scheduler()) if settings.daily_automation_enabled else None
     try:
         yield
@@ -196,21 +210,29 @@ def health():
 
 @app.get("/api/dashboard")
 def dashboard(db: Session = Depends(get_db)):
-    has_live = bool(db.scalar(select(func.count(Case.id)).where(Case.demo_data.is_(False), Case.source_type == "reddit_rss")))
-    status_query = select(Case.status, func.count(Case.id)).group_by(Case.status)
-    if has_live:
-        status_query = status_query.where(Case.demo_data.is_(False))
-    rows = db.execute(status_query).all()
-    counts = {key: value for key, value in rows}
+    eligible_cases = [case for case in db.scalars(select(Case)).all() if case_content_eligible(case)]
+    has_live = any(not case.demo_data and case.source_type == "reddit_rss" for case in eligible_cases)
+    visible_cases = [case for case in eligible_cases if not case.demo_data] if has_live else eligible_cases
+    counts: dict[str, int] = {}
+    for case in visible_cases:
+        counts[case.status] = counts.get(case.status, 0) + 1
     review_statuses = {"review_ready", "context_review", "needs_research", "research_queued"}
     archive_statuses = {"approved", "rejected", "auto_rejected", "similar_not_same"}
-    pending_query = select(func.count(Candidate.id)).join(Case).where(Candidate.rights_status == "editorial_review_required")
-    blocked_query = select(func.count(Candidate.id)).join(Case).where(Candidate.rights_status == "do_not_use")
-    if has_live:
-        pending_query = pending_query.where(Case.demo_data.is_(False))
-        blocked_query = blocked_query.where(Case.demo_data.is_(False))
-    rights_pending = (db.scalar(pending_query) or 0) + (sum(counts.values()) if has_live else 0)
-    rights_blocked = db.scalar(blocked_query) or 0
+    visible_case_ids = [case.id for case in visible_cases]
+    if visible_case_ids:
+        pending_query = select(func.count(Candidate.id)).where(
+            Candidate.case_id.in_(visible_case_ids),
+            Candidate.rights_status == "editorial_review_required",
+        )
+        blocked_query = select(func.count(Candidate.id)).where(
+            Candidate.case_id.in_(visible_case_ids),
+            Candidate.rights_status == "do_not_use",
+        )
+        rights_pending = (db.scalar(pending_query) or 0) + (sum(counts.values()) if has_live else 0)
+        rights_blocked = db.scalar(blocked_query) or 0
+    else:
+        rights_pending = 0
+        rights_blocked = 0
     last_run = db.scalar(select(JobRun).where(JobRun.job_type == "daily_reddit_automation").order_by(JobRun.created_at.desc()))
     return {
         "total": sum(counts.values()),
@@ -237,19 +259,22 @@ def list_cases(status_filter: str | None = Query(default=None, alias="status"), 
         Case.created_at.desc(),
         Case.id.asc(),
     )
-    has_live = bool(db.scalar(select(func.count(Case.id)).where(Case.demo_data.is_(False), Case.source_type == "reddit_rss")))
+    live_cases = db.scalars(
+        select(Case).where(Case.demo_data.is_(False), Case.source_type == "reddit_rss")
+    ).all()
+    has_live = any(case_content_eligible(case) for case in live_cases)
     if has_live:
         stmt = stmt.where(Case.demo_data.is_(False))
     if status_filter and status_filter != "all":
         stmt = stmt.where(Case.status == status_filter)
-    return [case_json(row) for row in db.scalars(stmt).all()]
+    return [case_json(row) for row in db.scalars(stmt).all() if case_content_eligible(row)]
 
 
 @app.get("/api/cases/{case_id}")
 def get_case(case_id: str, db: Session = Depends(get_db)):
     stmt = select(Case).where(Case.id == case_id).options(selectinload(Case.candidates).selectinload(Candidate.decisions))
     case = db.scalar(stmt)
-    if not case:
+    if not case or not case_content_eligible(case):
         raise HTTPException(404, "Case not found")
     data = case_json(case, detail=True)
     collage = db.scalar(select(Collage).where(Collage.case_id == case_id).order_by(Collage.created_at.desc()))
@@ -269,6 +294,12 @@ def get_case(case_id: str, db: Session = Depends(get_db)):
 
 @app.post("/api/intake/reddit-url", status_code=201, dependencies=[Depends(require_editor)])
 def manual_intake(payload: ManualIntake, db: Session = Depends(get_db)):
+    eligible, _ = editorial_subject_eligibility(payload.title, payload.body, payload.celebrity)
+    if not eligible:
+        raise HTTPException(
+            422,
+            "A clearly identified person is required. Anonymous brand or campaign creative is not added to the collage queue.",
+        )
     case = Case(permalink=str(payload.reddit_url), source_title=payload.title, source_body=payload.body, celebrity=payload.celebrity, designer=payload.designer, event_name=payload.event_name, status="context_review", extraction={"needs_human_context_review": True})
     db.add(case)
     try:
@@ -302,7 +333,7 @@ def source_url_intake(payload: SourceUrlIntake, db: Session = Depends(get_db)):
 @app.post("/api/cases/{case_id}/fashion-category", dependencies=[Depends(require_editor)])
 def set_fashion_category(case_id: str, payload: FashionCategoryInput, db: Session = Depends(get_db)):
     case = db.get(Case, case_id)
-    if not case:
+    if not case or not case_content_eligible(case):
         raise HTTPException(404, "Case not found")
     extraction = case.extraction if isinstance(case.extraction, dict) else {}
     previous = case_fashion_category(case)
@@ -321,7 +352,7 @@ def set_fashion_category(case_id: str, payload: FashionCategoryInput, db: Sessio
 @app.post("/api/cases/{case_id}/research", dependencies=[Depends(require_editor)])
 def queue_research(case_id: str, db: Session = Depends(get_db)):
     case = db.scalar(select(Case).where(Case.id == case_id).options(selectinload(Case.candidates)))
-    if not case:
+    if not case or not case_content_eligible(case):
         raise HTTPException(404, "Case not found")
     if case.source_type not in {"reddit_rss", "public_post_url"}:
         raise HTTPException(422, "Automated archive research requires a live Reddit or imported public-post case")
@@ -335,7 +366,7 @@ def queue_research(case_id: str, db: Session = Depends(get_db)):
 def decide(candidate_id: str, payload: DecisionInput, db: Session = Depends(get_db)):
     stmt = select(Candidate).where(Candidate.id == candidate_id).options(selectinload(Candidate.case), selectinload(Candidate.decisions))
     candidate = db.scalar(stmt)
-    if not candidate:
+    if not candidate or not case_content_eligible(candidate.case):
         raise HTTPException(404, "Candidate not found")
     if payload.decision == "approved":
         strong_source = any(item.get("grade") in {"A", "B"} and item.get("url") for item in candidate.evidence)
@@ -360,7 +391,7 @@ def decide(candidate_id: str, payload: DecisionInput, db: Session = Depends(get_
 def create_collage(case_id: str, payload: CollageInput, db: Session = Depends(get_db)):
     case = db.scalar(select(Case).where(Case.id == case_id).options(selectinload(Case.candidates).selectinload(Candidate.decisions)))
     candidate = next((item for item in case.candidates if item.id == payload.candidate_id), None) if case else None
-    if not case or not candidate or candidate.case_id != case.id:
+    if not case or not case_content_eligible(case) or not candidate or candidate.case_id != case.id:
         raise HTTPException(404, "Case or candidate not found")
     decision = max(candidate.decisions, key=lambda item: item.decided_at) if candidate.decisions else None
     if not decision or decision.decision != "approved":
@@ -415,7 +446,7 @@ async def upload_collage_asset(
     db: Session = Depends(get_db),
 ):
     case = db.get(Case, case_id)
-    if not case:
+    if not case or not case_content_eligible(case):
         raise HTTPException(404, "Case not found")
     if not rights_confirmed:
         raise HTTPException(422, "Confirm that the image may be used in an editorial draft")
@@ -499,7 +530,7 @@ async def upload_collage_watermark(
     db: Session = Depends(get_db),
 ):
     case = db.get(Case, case_id)
-    if not case:
+    if not case or not case_content_eligible(case):
         raise HTTPException(404, "Case not found")
     editor_id = editor_id.strip()
     if len(editor_id) < 2 or len(editor_id) > 120:
@@ -579,7 +610,7 @@ def edit_collage(case_id: str, payload: CollageEditInput, db: Session = Depends(
         .where(Case.id == case_id)
         .options(selectinload(Case.candidates).selectinload(Candidate.decisions))
     )
-    if not case:
+    if not case or not case_content_eligible(case):
         raise HTTPException(404, "Case not found")
 
     catalog = build_panel_catalog(case, case.candidates, include_automation_matches=True)
@@ -680,6 +711,9 @@ def edit_collage(case_id: str, payload: CollageEditInput, db: Session = Depends(
 
 @app.get("/api/cases/{case_id}/bundle")
 def download_bundle(case_id: str, db: Session = Depends(get_db)):
+    case = db.get(Case, case_id)
+    if not case or not case_content_eligible(case):
+        raise HTTPException(404, "Case not found")
     collage = db.scalar(select(Collage).where(Collage.case_id == case_id).order_by(Collage.created_at.desc()))
     if not collage or not os.path.exists(collage.bundle_path):
         raise HTTPException(404, "No collage bundle exists")
@@ -687,10 +721,10 @@ def download_bundle(case_id: str, db: Session = Depends(get_db)):
 
 
 @app.post("/api/runs/daily", dependencies=[Depends(require_editor)])
-def daily_run(db: Session = Depends(get_db)):
+def daily_run(target_date: date | None = Query(default=None), db: Session = Depends(get_db)):
     if settings.reddit_source_mode not in {"rss", "live", "approved_api"}:
         raise HTTPException(status_code=409, detail="Set REDDIT_SOURCE_MODE=rss to enable daily automation")
     try:
-        return run_daily_automation(db, settings, STATIC_DIR, trigger="editor")
+        return run_daily_automation(db, settings, STATIC_DIR, trigger="editor", target_date=target_date)
     except AutomationError as exc:
         raise HTTPException(status_code=502, detail=f"Daily automation failed: {exc}") from exc

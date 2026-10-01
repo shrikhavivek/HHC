@@ -3,7 +3,7 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
-type WorkspaceView = "today" | "women" | "men" | "queue" | "archive" | "rights";
+type WorkspaceView = "today" | "women" | "men" | "both" | "pending" | "reviewed";
 type Dashboard = {
   total: number;
   review_ready: number;
@@ -145,8 +145,8 @@ type CaseDetail = CaseSummary & {
 };
 type CollageResult = { previewUrl: string; bundleUrl: string; assetCount: number };
 
-const REVIEW_STATUSES = new Set(["review_ready", "context_review", "needs_research", "research_queued"]);
-const ARCHIVE_STATUSES = new Set(["approved", "rejected", "auto_rejected", "similar_not_same"]);
+const PENDING_STATUSES = new Set(["review_ready", "context_review", "needs_research", "research_queued"]);
+const REVIEWED_STATUSES = new Set(["approved", "rejected", "auto_rejected", "similar_not_same"]);
 const DEFAULT_CROP_RECT: CropRectangle = { x: 0, y: 0, width: 1, height: 1 };
 const DEFAULT_PANEL_OPTION: PanelLayoutOption = { width_scale: 1, crop_mode: "fit", focal_x: .5, focal_y: .5, zoom: 1, crop_rect: DEFAULT_CROP_RECT };
 const DEFAULT_IMAGE_ADJUSTMENTS: ImageAdjustments = { brightness: 1, contrast: 1, saturation: 1, grayscale: 0 };
@@ -167,7 +167,7 @@ const VIEW_META: Record<WorkspaceView, { label: string; short: string; title: st
     short: "Women’s desk",
     title: "Women’s fashion intelligence.",
     accent: "Every appearance, clearly filed.",
-    description: "Women’s and mixed-celebrity looks from the daily Reddit intake, with outfit research and collage status together.",
+    description: "Women’s looks from the daily Reddit intake, with outfit research and collage status together.",
     listTitle: "Women’s looks",
     listKicker: "Dedicated content desk",
   },
@@ -176,36 +176,36 @@ const VIEW_META: Record<WorkspaceView, { label: string; short: string; title: st
     short: "Men’s desk",
     title: "Men’s fashion intelligence.",
     accent: "A sharper menswear archive.",
-    description: "Men’s and mixed-celebrity looks separated into a focused listing without losing their shared editorial evidence.",
+    description: "Men’s looks separated into a focused listing without losing their editorial evidence.",
     listTitle: "Men’s looks",
     listKicker: "Dedicated content desk",
   },
-  queue: {
-    label: "Review queue",
-    short: "Decisions",
-    title: "Your editorial queue.",
+  both: {
+    label: "Both fashion",
+    short: "Shared desk",
+    title: "Women and men, together.",
+    accent: "Group appearances, clearly filed.",
+    description: "Looks featuring both women and men are collected in their own section for focused group-post review.",
+    listTitle: "Both fashion looks",
+    listKicker: "Shared appearances",
+  },
+  pending: {
+    label: "Pending review",
+    short: "Pending",
+    title: "Pending editorial review.",
     accent: "Resolve what needs a human eye.",
     description: "Review context gaps, verify garment identity and make defensible decisions before any collage is produced.",
     listTitle: "Awaiting action",
     listKicker: "Human review",
   },
-  archive: {
-    label: "Fashion archive",
-    short: "History",
-    title: "The outfit archive.",
-    accent: "Approved stories and closed leads.",
-    description: "Search completed outfit research, revisit approved comparisons and regenerate source-backed collage bundles.",
-    listTitle: "Resolved stories",
-    listKicker: "Editorial memory",
-  },
-  rights: {
-    label: "Rights desk",
-    short: "Sources",
-    title: "Image rights, made visible.",
-    accent: "Know every source before use.",
-    description: "Inspect source grade, official status, exact-outfit verification and usage restrictions for every panel.",
-    listTitle: "Source cases",
-    listKicker: "Provenance desk",
+  reviewed: {
+    label: "Reviewed",
+    short: "Reviewed",
+    title: "Reviewed outfit stories.",
+    accent: "Decisions preserved for the next edit.",
+    description: "Revisit approved and closed outfit research, then reopen its collage, archive evidence and source-rights record.",
+    listTitle: "Reviewed stories",
+    listKicker: "Editorial history",
   },
 };
 
@@ -213,22 +213,24 @@ const FILTERS: Record<WorkspaceView, string[]> = {
   today: ["all", "review_ready", "context_review", "needs_research", "approved"],
   women: ["all", "review_ready", "context_review", "needs_research", "approved"],
   men: ["all", "review_ready", "context_review", "needs_research", "approved"],
-  queue: ["all", "review_ready", "context_review", "needs_research", "research_queued"],
-  archive: ["all", "approved", "auto_rejected", "rejected", "similar_not_same"],
-  rights: ["all", "low", "medium", "high"],
+  both: ["all", "review_ready", "context_review", "needs_research", "approved"],
+  pending: ["all", "review_ready", "context_review", "needs_research", "research_queued"],
+  reviewed: ["all", "approved", "auto_rejected", "rejected", "similar_not_same"],
 };
 
 const pretty = (value: string) => value.replaceAll("_", " ").replace(/\b\w/g, character => character.toUpperCase());
+const fashionCategoryLabel = (value: CaseSummary["fashion_category"]) => value === "mixed" ? "Both" : value === "unclassified" ? "Unfiled" : pretty(value);
 const asset = (path: string) => path.startsWith("http") ? path : path.startsWith("/static/") || path.startsWith("/outputs/") || path.startsWith("/media-files/") ? `/media${path}` : path;
 const isHistorical = (value: string) => /^(same_item|same_outfit)_/.test(value);
 const isBlocked = (value: string) => ["do_not_use", "blocked", "unknown_blocked"].includes(value);
 const assetRoleLabel = (role: OutfitAsset["role"]) => role === "designer_reference" ? "Original outfit" : role === "editor_upload" ? "Editor upload" : "Current angle";
 
 function belongsToView(item: CaseSummary, view: WorkspaceView) {
-  if (view === "women") return ["women", "mixed"].includes(item.fashion_category);
-  if (view === "men") return ["men", "mixed"].includes(item.fashion_category);
-  if (view === "queue") return REVIEW_STATUSES.has(item.status);
-  if (view === "archive") return ARCHIVE_STATUSES.has(item.status);
+  if (view === "women") return item.fashion_category === "women";
+  if (view === "men") return item.fashion_category === "men";
+  if (view === "both") return item.fashion_category === "mixed";
+  if (view === "pending") return PENDING_STATUSES.has(item.status);
+  if (view === "reviewed") return REVIEWED_STATUSES.has(item.status);
   return true;
 }
 
@@ -255,6 +257,7 @@ function Icon({ name, size = 20 }: { name: string; size?: number }) {
     arrow: <path d="m9 18 6-6-6-6"/>,
     check: <path d="m5 12 4 4L19 6"/>,
     close: <path d="M6 6l12 12M18 6 6 18"/>,
+    logout: <><path d="M10 5H5v14h5"/><path d="M14 8l4 4-4 4M18 12H9"/></>,
     link: <><path d="M10 13a5 5 0 0 0 7.5.5l2-2a5 5 0 0 0-7-7l-1.2 1.2"/><path d="M14 11a5 5 0 0 0-7.5-.5l-2 2a5 5 0 0 0 7 7l1.2-1.2"/></>,
     download: <><path d="M12 3v12m0 0 5-5m-5 5-5-5"/><path d="M5 21h14"/></>,
     clock: <><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></>,
@@ -269,6 +272,7 @@ function Icon({ name, size = 20 }: { name: string; size?: number }) {
     trash: <><path d="M4 7h16M9 7V4h6v3M7 7l1 14h8l1-14"/><path d="M10 11v6M14 11v6"/></>,
     woman: <><circle cx="12" cy="7" r="4"/><path d="M12 11v10M8 16h8M9 21h6"/></>,
     man: <><circle cx="10" cy="9" r="4"/><path d="m13 6 6-3m0 0v5m0-5h-5M10 13v8"/></>,
+    both: <><circle cx="8" cy="8" r="3"/><circle cx="16" cy="8" r="3"/><path d="M3 20v-2a5 5 0 0 1 5-5h1M21 20v-2a5 5 0 0 0-5-5h-1M12 13v8"/></>,
     upload: <><path d="M12 16V4m0 0L7 9m5-5 5 5"/><path d="M4 15v5h16v-5"/></>,
     tune: <><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></>,
   };
@@ -681,42 +685,62 @@ function AssetBoard({ assets }: { assets: OutfitAsset[] }) {
   </section>;
 }
 
-function RightsCard({ image, eyebrow, title, subtitle, status, source, exact, official }: { image: string; eyebrow: string; title: string; subtitle: string; status: string; source: string; exact: boolean; official?: boolean }) {
-  const blocked = isBlocked(status);
-  return <article className={`rights-card ${blocked ? "is-blocked" : ""}`}>
-    <div className="rights-image"><img src={asset(image)} alt={title}/><span>{eyebrow}</span></div>
-    <div className="rights-copy">
-      <div className="rights-tags"><span className={blocked ? "blocked" : "pending"}>{blocked ? "Blocked" : pretty(status)}</span>{official && <span className="official">Official source</span>}{exact && <span className="exact">Exact outfit</span>}</div>
-      <h3>{title}</h3><p>{subtitle}</p>
-      {source ? <a href={source} target="_blank" rel="noreferrer"><Icon name="external" size={12}/>Inspect original source</a> : <span className="missing-source">Source URL missing</span>}
-    </div>
-  </article>;
-}
+function CollageArchiveRights({ selected }: { selected: CaseDetail }) {
+  const rightsEntries = [
+    {
+      id: "current-source",
+      label: "Current source image",
+      detail: `${selected.celebrity} · ${selected.event_name}`,
+      status: "editorial_review_required",
+      source: selected.permalink,
+      exact: true,
+      official: false,
+    },
+    ...selected.candidates.map(item => ({
+      id: `candidate-${item.id}`,
+      label: item.person,
+      detail: `Historical candidate · Grade ${item.source_grade}`,
+      status: item.rights_status,
+      source: item.evidence[0]?.url || "",
+      exact: Boolean(item.checks.identity),
+      official: false,
+    })),
+    ...selected.assets.map(item => ({
+      id: `asset-${item.id}`,
+      label: item.label,
+      detail: `${item.publisher} · Grade ${item.source_grade}`,
+      status: item.rights_status,
+      source: item.source_url,
+      exact: item.exact_match,
+      official: item.verified_source,
+    })),
+  ];
+  const blocked = rightsEntries.filter(item => isBlocked(item.status)).length;
+  const verified = rightsEntries.filter(item => item.official).length;
 
-function RightsWorkspace({ selected }: { selected: CaseDetail | null }) {
-  if (!selected) return <div className="review-empty"><span>RD</span><h2>Select a source case</h2><p>Rights and provenance details will appear here.</p></div>;
-  const sourceName = selected.source_type === "reddit_rss" ? "Reddit" : "public post";
-  const allStatuses = ["editorial_review_required", ...selected.candidates.map(item => item.rights_status), ...selected.assets.map(item => item.rights_status)];
-  const blocked = allStatuses.filter(isBlocked).length;
-  const official = selected.assets.filter(item => item.verified_source).length;
-  return <div className="rights-workspace">
-    <header className="rights-hero">
-      <div><small>Rights dossier / {selected.designer}</small><h2>{selected.celebrity}</h2><p>{selected.event_name} · {selected.event_date || "Date unresolved"}</p></div>
-      <a href={selected.permalink} target="_blank" rel="noreferrer"><Icon name="external"/>Open {sourceName} source</a>
-    </header>
-    <div className="rights-summary">
-      <div><small>Source panels</small><strong>{allStatuses.length}</strong></div>
-      <div><small>Verified product looks</small><strong>{official}</strong></div>
-      <div><small>Blocked assets</small><strong>{blocked}</strong></div>
-      <div><small>Publishing state</small><strong>{blocked ? "Hold" : "Review required"}</strong></div>
+  return <details className="collage-context-panel" open>
+    <summary><span><Icon name="shield" size={15}/><b>Fashion archive &amp; rights</b></span><small>{selected.candidates.length} archive lead{selected.candidates.length === 1 ? "" : "s"} · {rightsEntries.length} sources</small></summary>
+    <div className="collage-context-content">
+      <section className="collage-archive-section">
+        <header><div><small>Fashion archive</small><strong>Past outfit research</strong></div><span>{selected.candidates.length}</span></header>
+        {selected.candidates.length ? <div className="collage-archive-list">{selected.candidates.map(item => <article key={item.id}>
+          <img src={asset(item.image_path)} alt={`${item.person} archive reference`}/>
+          <div><small>{item.event_date || "Date unresolved"}</small><strong>{item.person}</strong><p>{pretty(item.proposed_match_type)} · {Math.round(item.visual_score * 100)}% signal</p></div>
+          <span>{item.decision ? pretty(item.decision.decision) : "Pending"}</span>
+        </article>)}</div> : <p className="collage-context-empty">No exact historical outfit has qualified yet.</p>}
+      </section>
+
+      <section className="collage-rights-section">
+        <header><div><small>Rights review</small><strong>Sources attached to this collage</strong></div><span className={blocked ? "has-blocked" : ""}>{blocked ? `${blocked} blocked` : `${verified} verified`}</span></header>
+        <div className="collage-rights-notice"><Icon name="shield" size={14}/><span>A public URL is not a publishing licence. Confirm usage and credit before publishing.</span></div>
+        <div className="collage-rights-list">{rightsEntries.map(item => <article className={isBlocked(item.status) ? "is-blocked" : ""} key={item.id}>
+          <div><strong>{item.label}</strong><small>{item.detail}</small></div>
+          <div className="collage-rights-tags"><span>{isBlocked(item.status) ? "Blocked" : pretty(item.status)}</span>{item.official && <span>Official</span>}{item.exact && <span>Exact</span>}</div>
+          {item.source ? <a href={item.source} target="_blank" rel="noreferrer" aria-label={`Open source for ${item.label}`}><Icon name="external" size={12}/></a> : <i title="Source URL missing">—</i>}
+        </article>)}</div>
+      </section>
     </div>
-    <div className="rights-notice"><Icon name="shield"/><div><strong>A URL is not a publishing licence.</strong><span>Confirm photographer, agency and designer credit terms before WordPress publication.</span></div></div>
-    <div className="rights-grid">
-      <RightsCard image={selected.base_image} eyebrow={`Current ${sourceName} image`} title={selected.celebrity} subtitle={selected.event_name} status="editorial_review_required" source={selected.permalink} exact />
-      {selected.candidates.map(item => <RightsCard key={item.id} image={item.image_path} eyebrow="Historical candidate" title={item.person} subtitle={`${item.event_name} · Grade ${item.source_grade}`} status={item.rights_status} source={item.evidence[0]?.url || ""} exact={Boolean(item.checks.identity)} />)}
-      {selected.assets.map(item => <RightsCard key={item.id} image={item.image_path} eyebrow={item.role === "designer_reference" ? "Original product look" : item.role === "editor_upload" ? "Editor upload" : "Current angle"} title={item.label} subtitle={`${item.publisher} · Grade ${item.source_grade}`} status={item.rights_status} source={item.source_url} exact={item.exact_match} official={item.verified_source} />)}
-    </div>
-  </div>;
+  </details>;
 }
 
 export default function DashboardPage() {
@@ -836,7 +860,7 @@ export default function DashboardPage() {
 
   const visibleCases = useMemo(() => cases.filter(item => {
     if (!belongsToView(item, workspaceView)) return false;
-    const filterMatch = filter === "all" || (workspaceView === "rights" ? item.risk_level === filter : item.status === filter);
+    const filterMatch = filter === "all" || item.status === filter;
     const haystack = `${item.celebrity} ${item.designer} ${item.event_name} ${item.title} ${item.match_type} ${item.fashion_category}`.toLowerCase();
     return filterMatch && haystack.includes(search.trim().toLowerCase());
   }).sort(newestPostFirst), [cases, filter, search, workspaceView]);
@@ -863,10 +887,11 @@ export default function DashboardPage() {
     ...historicalCandidates.map(item => ({ id: item.id, image_path: item.image_path, label: item.person })),
     ...(!hasHistoricalPlan && eligibleOriginal ? [{ id: eligibleOriginal.id, image_path: eligibleOriginal.image_path, label: "Original outfit" }] : []),
   ] : [];
-  const queueCount = cases.filter(item => REVIEW_STATUSES.has(item.status)).length;
-  const archiveCount = cases.filter(item => ARCHIVE_STATUSES.has(item.status)).length;
-  const womenCount = cases.filter(item => ["women", "mixed"].includes(item.fashion_category)).length;
-  const menCount = cases.filter(item => ["men", "mixed"].includes(item.fashion_category)).length;
+  const pendingCount = cases.filter(item => PENDING_STATUSES.has(item.status)).length;
+  const reviewedCount = cases.filter(item => REVIEWED_STATUSES.has(item.status)).length;
+  const womenCount = cases.filter(item => item.fashion_category === "women").length;
+  const menCount = cases.filter(item => item.fashion_category === "men").length;
+  const bothCount = cases.filter(item => item.fashion_category === "mixed").length;
   const providersLive = ["rss", "live", "approved_api"].includes(dashboard?.source_mode || "");
   const meta = VIEW_META[workspaceView];
   const editorCatalog = selected?.collage_editor?.panels || [];
@@ -894,8 +919,8 @@ export default function DashboardPage() {
       setDecisionMode(null);
       setReason("");
       await load();
-      if (caseId && workspaceView !== "queue") await openCase(caseId);
-      if (workspaceView === "queue") setSelected(null);
+      if (caseId && workspaceView !== "pending") await openCase(caseId);
+      if (workspaceView === "pending") setSelected(null);
     } finally { setDecisionBusy(false); }
   }
 
@@ -1078,7 +1103,7 @@ export default function DashboardPage() {
       const caseId = selected.id;
       await load(true);
       await openCase(caseId);
-      setToast(`Moved to ${category === "mixed" ? "both fashion desks" : `${pretty(category)}’s fashion`}.`);
+      setToast(`Moved to ${category === "mixed" ? "the Both section" : `${pretty(category)}’s fashion`}.`);
     } catch {
       setToast("The content listing could not reach the research service.");
     } finally { setCategoryBusy(false); }
@@ -1141,28 +1166,32 @@ export default function DashboardPage() {
       </button>
       <nav aria-label="Workspace navigation">
         <button type="button" className={`nav-item ${workspaceView === "today" ? "active" : ""}`} onClick={() => switchView("today")} aria-current={workspaceView === "today" ? "page" : undefined}><Icon name="grid"/><span className="nav-copy"><strong>Today&apos;s edit</strong><small>Daily outfit desk</small></span><b>{cases.length}</b></button>
-        <button type="button" className={`nav-item ${workspaceView === "women" ? "active" : ""}`} onClick={() => switchView("women")} aria-current={workspaceView === "women" ? "page" : undefined}><Icon name="woman"/><span className="nav-copy"><strong>Women&apos;s fashion</strong><small>Women &amp; mixed looks</small></span><b>{womenCount}</b></button>
-        <button type="button" className={`nav-item ${workspaceView === "men" ? "active" : ""}`} onClick={() => switchView("men")} aria-current={workspaceView === "men" ? "page" : undefined}><Icon name="man"/><span className="nav-copy"><strong>Men&apos;s fashion</strong><small>Men &amp; mixed looks</small></span><b>{menCount}</b></button>
-        <button type="button" className={`nav-item ${workspaceView === "queue" ? "active" : ""}`} onClick={() => switchView("queue")} aria-current={workspaceView === "queue" ? "page" : undefined}><Icon name="queue"/><span className="nav-copy"><strong>Review queue</strong><small>Needs your decision</small></span><b>{queueCount}</b></button>
-        <button type="button" className={`nav-item ${workspaceView === "archive" ? "active" : ""}`} onClick={() => switchView("archive")} aria-current={workspaceView === "archive" ? "page" : undefined}><Icon name="archive"/><span className="nav-copy"><strong>Fashion archive</strong><small>Resolved outfit stories</small></span><b>{archiveCount}</b></button>
-        <button type="button" className={`nav-item ${workspaceView === "rights" ? "active" : ""}`} onClick={() => switchView("rights")} aria-current={workspaceView === "rights" ? "page" : undefined}><Icon name="shield"/><span className="nav-copy"><strong>Rights desk</strong><small>Sources and usage</small></span><b>{dashboard?.rights_pending || 0}</b></button>
+        <button type="button" className={`nav-item ${workspaceView === "women" ? "active" : ""}`} onClick={() => switchView("women")} aria-current={workspaceView === "women" ? "page" : undefined}><Icon name="woman"/><span className="nav-copy"><strong>Women&apos;s fashion</strong><small>Women-only looks</small></span><b>{womenCount}</b></button>
+        <button type="button" className={`nav-item ${workspaceView === "men" ? "active" : ""}`} onClick={() => switchView("men")} aria-current={workspaceView === "men" ? "page" : undefined}><Icon name="man"/><span className="nav-copy"><strong>Men&apos;s fashion</strong><small>Men-only looks</small></span><b>{menCount}</b></button>
+        <button type="button" className={`nav-item ${workspaceView === "both" ? "active" : ""}`} onClick={() => switchView("both")} aria-current={workspaceView === "both" ? "page" : undefined}><Icon name="both"/><span className="nav-copy"><strong>Both fashion</strong><small>Women &amp; men together</small></span><b>{bothCount}</b></button>
+        <button type="button" className={`nav-item ${workspaceView === "pending" ? "active" : ""}`} onClick={() => switchView("pending")} aria-current={workspaceView === "pending" ? "page" : undefined}><Icon name="queue"/><span className="nav-copy"><strong>Pending review</strong><small>Needs your decision</small></span><b>{pendingCount}</b></button>
+        <button type="button" className={`nav-item ${workspaceView === "reviewed" ? "active" : ""}`} onClick={() => switchView("reviewed")} aria-current={workspaceView === "reviewed" ? "page" : undefined}><Icon name="archive"/><span className="nav-copy"><strong>Reviewed</strong><small>Completed decisions</small></span><b>{reviewedCount}</b></button>
       </nav>
-      <button type="button" className="sidebar-add" onClick={() => void runAutomation()} disabled={automationBusy}><Icon name={automationBusy ? "refresh" : "spark"}/><span>{automationBusy ? "Building today’s drafts…" : "Run daily automation"}</span></button>
       <div className="sidebar-spacer"/>
       <div className="system-card"><div className={`pulse ${providersLive ? "" : "standby"}`}/><div><strong>{providersLive ? "Research connected" : "Curated demo mode"}</strong><small>{providersLive ? "Live providers operational" : "Live providers pending"}</small></div></div>
-      <div className="profile"><span>SK</span><div><strong>Senior editor</strong><small>Secure demo session</small></div><button type="button" className="logout-button" onClick={logout} title="Sign out"><Icon name="close"/></button></div>
+      <div className="profile"><span>SK</span><div><strong>Senior editor</strong><small>Secure demo session</small></div></div>
     </aside>
 
     <section className="content studio-content">
       <header className="command-bar">
         <div className="workspace-crumb"><span>HHC Studio</span><Icon name="arrow" size={12}/><strong>{meta.label}</strong></div>
         <div className="global-search"><Icon name="search" size={16}/><input ref={searchRef} value={search} onChange={event => setSearch(event.target.value)} placeholder="Search celebrity, designer, event…" aria-label="Search outfits"/>{search ? <button type="button" onClick={() => setSearch("")} aria-label="Clear search"><Icon name="close" size={13}/></button> : <kbd>/</kbd>}</div>
-        <div className="command-actions"><button type="button" className="icon-button" onClick={() => void load(true)} title="Refresh" disabled={refreshing}><Icon name="refresh"/></button><button type="button" className="source-import-button" onClick={() => setShowIntake(true)}><Icon name="link"/><span>Import post URL</span></button><button type="button" className="primary" onClick={() => void runAutomation()} disabled={automationBusy}><Icon name={automationBusy ? "refresh" : "spark"}/>{automationBusy ? "Building drafts…" : "Run daily automation"}</button></div>
+        <div className="command-actions">
+          <button type="button" className="icon-button" onClick={() => void load(true)} title="Refresh" disabled={refreshing}><Icon name="refresh"/></button>
+          <button type="button" className="source-import-button" onClick={() => setShowIntake(true)}><Icon name="link"/><span>Import post URL</span></button>
+          <button type="button" className="primary" onClick={() => void runAutomation()} disabled={automationBusy} title="Run daily automation" aria-label="Run daily automation"><Icon name={automationBusy ? "refresh" : "spark"}/><span>{automationBusy ? "Building drafts…" : "Run daily automation"}</span></button>
+          <button type="button" className="header-logout-button" onClick={logout} title="Log out and use different credentials" aria-label="Log out and return to credential entry"><Icon name="logout" size={16}/><span>Log out</span></button>
+        </div>
       </header>
 
       <header className="editorial-header studio-hero">
         <div className="header-rail"><span>{meta.short} / {editionCode}</span><i/><span>{dateLabel}</span></div>
-        <div className="hero-row"><div><div className="eyebrow"><span/>{workspaceView === "rights" ? "Source governance" : "Reddit + editor-selected public posts"}</div><h1>{meta.title} <em>{meta.accent}</em></h1><p>{meta.description}</p></div><div className="hero-seal"><span>{visibleCases.length.toString().padStart(2, "0")}</span><small>Visible<br/>outfits</small></div></div>
+        <div className="hero-row"><div><div className="eyebrow"><span/>Reddit + editor-selected public posts</div><h1>{meta.title} <em>{meta.accent}</em></h1><p>{meta.description}</p></div><div className="hero-seal"><span>{visibleCases.length.toString().padStart(2, "0")}</span><small>Visible<br/>outfits</small></div></div>
       </header>
 
       <section className={`provider-strip ${providersLive ? "is-live" : "is-demo"}`} aria-label="Research provider status">
@@ -1173,37 +1202,37 @@ export default function DashboardPage() {
 
       <section className="metrics" aria-label="Editorial summary">
         <article><span className="metric-number">01</span><div><small>Outfit cases</small><strong>{dashboard?.total ?? "—"}</strong><span>Current edition</span></div></article>
-        <article><span className="metric-number">02</span><div><small>Review queue</small><strong>{queueCount}</strong><span>Needs a decision</span></div></article>
-        <article><span className="metric-number">03</span><div><small>Resolved archive</small><strong>{archiveCount}</strong><span>Approved or closed</span></div></article>
+        <article><span className="metric-number">02</span><div><small>Pending review</small><strong>{pendingCount}</strong><span>Needs a decision</span></div></article>
+        <article><span className="metric-number">03</span><div><small>Reviewed</small><strong>{reviewedCount}</strong><span>Approved or closed</span></div></article>
         <article className="guardrail"><div className="guardrail-orbit"><Icon name="shield" size={18}/></div><span>Editorial promise</span><strong>Human taste. Machine speed.</strong><small>Nothing publishes without your final word.</small></article>
       </section>
 
       <section className="workspace studio-workspace">
         <div className="queue-panel">
           <div className="panel-heading"><div><small>{meta.listKicker}</small><h2>{meta.listTitle}</h2></div><span className="queue-count">{visibleCases.length.toString().padStart(2, "0")}</span></div>
-          <div className="filters">{FILTERS[workspaceView].map(item => <button type="button" key={item} className={filter === item ? "selected" : ""} onClick={() => setFilter(item)}>{item === "all" ? "All" : workspaceView === "rights" ? `${pretty(item)} risk` : pretty(item)}</button>)}</div>
+          <div className="filters">{FILTERS[workspaceView].map(item => <button type="button" key={item} className={filter === item ? "selected" : ""} onClick={() => setFilter(item)}>{item === "all" ? "All" : pretty(item)}</button>)}</div>
           <div className="case-list">
             {loading && <div className="loading-card"><i/><span>Preparing the edit…</span></div>}
             {!loading && visibleCases.map((item, index) => <button type="button" key={item.id} className={`case-card ${selected?.id === item.id ? "current" : ""}`} onClick={() => void openCase(item.id)}>
               <span className="case-index">{(index + 1).toString().padStart(2, "0")}</span><div className="case-thumb"><img src={asset(item.base_image)} alt={`${item.celebrity} in ${item.designer}`}/></div>
-              <div className="case-copy"><div><StatusPill status={item.status}/><span className={`fashion-chip fashion-${item.fashion_category}`}>{item.fashion_category === "unclassified" ? "Unfiled" : pretty(item.fashion_category)}</span><span className={`risk risk-${item.risk_level}`}>{item.risk_level}</span></div><strong>{item.celebrity}</strong><p>{item.designer} · {item.event_name}</p><footer><span>{item.event_date || "Date unresolved"}</span><b>{Math.round(item.confidence * 100)}% signal</b></footer></div><Icon name="arrow" size={15}/>
+              <div className="case-copy"><div><StatusPill status={item.status}/><span className={`fashion-chip fashion-${item.fashion_category}`}>{fashionCategoryLabel(item.fashion_category)}</span><span className={`risk risk-${item.risk_level}`}>{item.risk_level}</span></div><strong>{item.celebrity}</strong><p>{item.designer} · {item.event_name}</p><footer><span>{item.event_date || "Date unresolved"}</span><b>{Math.round(item.confidence * 100)}% signal</b></footer></div><Icon name="arrow" size={15}/>
             </button>)}
             {!loading && !visibleCases.length && <div className="empty enhanced-empty"><Icon name="search"/><strong>No matching outfits</strong><span>Clear the search or choose another filter.</span><button type="button" className="ghost" onClick={() => { setSearch(""); setFilter("all"); }}>Reset view</button></div>}
           </div>
         </div>
 
         <div className="review-panel">
-          {workspaceView === "rights" ? <RightsWorkspace selected={selected}/> : !selected ? <div className="review-empty"><span>HHC</span><h2>No outfit selected</h2><p>Choose a look from the rail to open its editorial file.</p></div> : <>
-            <div className="review-heading"><div><div className="review-meta"><StatusPill status={selected.status}/><span className={`fashion-chip fashion-${selected.fashion_category}`}>{selected.fashion_category === "unclassified" ? "Content desk open" : pretty(selected.fashion_category)}</span>{selected.demo_data && <span className="demo-chip">Demonstration</span>}</div><h2>{selected.celebrity}</h2><p><b>{selected.designer}</b><i/>{selected.event_name}</p></div><div className="review-heading-actions"><div className="category-editor"><small>Content listing</small><div>{(["women", "men", "mixed"] as const).map(category => <button type="button" key={category} className={selected.fashion_category === category ? "active" : ""} onClick={() => void updateFashionCategory(category)} disabled={categoryBusy}>{category === "mixed" ? "Both" : pretty(category)}</button>)}</div></div><a className="source-link" href={selected.permalink} target="_blank" rel="noreferrer"><Icon name="external"/>{selected.source_type === "reddit_rss" ? "Reddit source" : "Public source"}</a></div></div>
+          {!selected ? <div className="review-empty"><span>HHC</span><h2>No outfit selected</h2><p>Choose a look from the rail to open its editorial file.</p></div> : <>
+            <div className="review-heading"><div><div className="review-meta"><StatusPill status={selected.status}/><span className={`fashion-chip fashion-${selected.fashion_category}`}>{selected.fashion_category === "unclassified" ? "Content desk open" : fashionCategoryLabel(selected.fashion_category)}</span>{selected.demo_data && <span className="demo-chip">Demonstration</span>}</div><h2>{selected.celebrity}</h2><p><b>{selected.designer}</b><i/>{selected.event_name}</p></div><div className="review-heading-actions"><div className="category-editor"><small>Content listing</small><div>{(["women", "men", "mixed"] as const).map(category => <button type="button" key={category} className={selected.fashion_category === category ? "active" : ""} onClick={() => void updateFashionCategory(category)} disabled={categoryBusy}>{category === "mixed" ? "Both" : pretty(category)}</button>)}</div></div><a className="source-link" href={selected.permalink} target="_blank" rel="noreferrer"><Icon name="external"/>{selected.source_type === "reddit_rss" ? "Reddit source" : "Public source"}</a></div></div>
 
             {selected.latest_collage && <section className="automatic-draft-card">
               <div className="automatic-draft-image"><img src={asset(selected.latest_collage.preview_url)} alt={`Automatic collage for ${selected.celebrity}`}/><span>Generated automatically</span></div>
-              <div className="automatic-draft-copy"><small>Today’s ready-to-review output</small><h3>Single-image collage complete</h3><p>Every usable image from the source post is arranged edge-to-edge in one collage, followed by the historical or exact original-outfit comparison when available.</p><div><span><Icon name="check" size={13}/>{automaticPanelCount} source panel{automaticPanelCount === 1 ? "" : "s"} in one image</span><span><Icon name="shield" size={13}/>Draft only — never auto-published</span></div><footer><button type="button" className="primary" onClick={() => setCollageResult({ previewUrl: asset(selected.latest_collage!.preview_url), bundleUrl: selected.latest_collage!.bundle_url.replace(/^\/api\//, "/api/backend/"), assetCount: automaticPanelCount })}><Icon name="eye"/>View collage</button><button type="button" className="ghost" onClick={openCollageEditor}><Icon name="edit"/>Edit collage</button><a className="ghost" href={selected.latest_collage.bundle_url.replace(/^\/api\//, "/api/backend/")} target="_blank" rel="noreferrer"><Icon name="download"/>Evidence bundle</a></footer></div>
+              <div className="automatic-draft-copy"><small>Today’s ready-to-review output</small><h3>Single-image collage complete</h3><p>Every usable image from the source post is arranged edge-to-edge in one collage, followed by the historical or exact original-outfit comparison when available.</p><div><span><Icon name="check" size={13}/>{automaticPanelCount} source panel{automaticPanelCount === 1 ? "" : "s"} in one image</span><span><Icon name="shield" size={13}/>Draft only — never auto-published</span></div><footer><button type="button" className="primary" onClick={() => setCollageResult({ previewUrl: asset(selected.latest_collage!.preview_url), bundleUrl: selected.latest_collage!.bundle_url.replace(/^\/api\//, "/api/backend/"), assetCount: automaticPanelCount })}><Icon name="eye"/>View collage</button><button type="button" className="ghost" onClick={openCollageEditor}><Icon name="edit"/>Edit collage &amp; sources</button><a className="ghost" href={selected.latest_collage.bundle_url.replace(/^\/api\//, "/api/backend/")} target="_blank" rel="noreferrer"><Icon name="download"/>Evidence bundle</a></footer></div>
             </section>}
 
             {!candidate && <>
               <AssetBoard assets={supplementaryAssets}/>
-              <div className="no-candidate-state"><span><Icon name="search" size={22}/></span><small>Archive discovery</small><h3>No exact historical match found yet</h3><p>This source-only collage was still created automatically. Research can recheck the growing Reddit and imported-post archive using the title, description, designer attribution and image signals.</p><button type="button" className="primary" onClick={() => selected.source_type === "reddit_rss" || selected.source_type === "public_post_url" ? void queueResearch() : void runAutomation()} disabled={researchBusy || automationBusy}>{researchBusy || automationBusy ? "Checking sources…" : "Check for new outfits now"}</button></div>
+              <div className="no-candidate-state"><span><Icon name="search" size={22}/></span><small>Archive discovery</small><h3>No exact historical match found yet</h3><p>This source-only collage was still created automatically. Research can recheck the growing Reddit and imported-post archive using the title, description, designer attribution and image signals.</p><button type="button" className="primary" onClick={() => void queueResearch()} disabled={researchBusy}>{researchBusy ? "Checking sources…" : "Check for new outfits now"}</button></div>
             </>}
 
             {candidate && <>
@@ -1241,7 +1270,7 @@ export default function DashboardPage() {
     </section></div>}
 
     {showCollageEditor && selected && <div className="modal-backdrop collage-editor-backdrop" onMouseDown={() => !editorBusy && setShowCollageEditor(false)}><section className="collage-editor-modal" role="dialog" aria-modal="true" aria-labelledby="collage-editor-title" onMouseDown={event => event.stopPropagation()}>
-      <header><div><small>Optional manual control</small><h2 id="collage-editor-title">Edit this collage.</h2><p>Reorder, replace, resize, or crop each image. Originals stay untouched and all source metadata remains attached.</p></div><button type="button" className="modal-close" onClick={() => setShowCollageEditor(false)} disabled={editorBusy} aria-label="Close collage editor"><Icon name="close"/></button></header>
+      <header><div><small>Collage workspace</small><h2 id="collage-editor-title">Edit this collage.</h2><p>Reorder, replace, resize, or crop each image, then review its fashion-archive history and source rights in the same panel.</p></div><button type="button" className="modal-close" onClick={() => setShowCollageEditor(false)} disabled={editorBusy} aria-label="Close collage editor"><Icon name="close"/></button></header>
       <div className="collage-editor-summary"><span><b>{editorSelectedPanels.length}</b> selected panels</span><span><Icon name="shield" size={13}/>Source and rights metadata stay attached</span><span>{editorWatermark?.enabled ? "HHC watermark ready" : "Watermark optional"}</span></div>
       <div className="collage-editor-body">
         <section className="selected-panel-list"><div className="editor-section-heading"><div><small>Final image order</small><h3>Panels in collage</h3></div><button type="button" onClick={resetCollageLayout}>Reset automatic layout</button></div>
@@ -1269,6 +1298,7 @@ export default function DashboardPage() {
           })}</div>
         </section>
         <aside className="available-panel-list"><div className="editor-section-heading"><div><small>Replacement library</small><h3>Available images</h3></div><span>{editorAvailablePanels.length}</span></div>
+          <CollageArchiveRights selected={selected}/>
           <CollageAdjustmentEditor
             baseImage={asset(selected.latest_collage?.source_preview_url || selected.latest_collage?.base_preview_url || selected.latest_collage?.preview_url || "")}
             adjustments={editorCollageAdjustments}

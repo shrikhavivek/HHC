@@ -5,7 +5,7 @@ from typing import Any, Iterable, Sequence
 
 VALID_ASSET_ROLES = {"current_angle", "designer_reference", "editor_upload"}
 BLOCKED_RIGHTS_STATUSES = {"do_not_use", "blocked", "unknown_blocked"}
-CURRENT_MATCHER_VERSION = 2
+CURRENT_MATCHER_VERSION = 4
 
 
 def normalize_case_assets(case: Any) -> list[dict[str, Any]]:

@@ -9,9 +9,10 @@ import re
 import threading
 import time
 from functools import wraps
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlencode, urlparse
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import feedparser
 import requests
@@ -29,6 +30,36 @@ from .public_sources import DuplicatePublicSourceError, PublicSourceError, downl
 
 BLOCKED_TITLE_PREFIXES = ("[request]", "id this", "who is", "weekly thread")
 UNKNOWN_VALUES = {"", "unknown", "unresolved", "not stated", "n/a"}
+SUBJECT_POLICY_VERSION = 1
+SUBJECT_POLICY_RULE = "A clearly identified person must be the subject; anonymous brand and campaign creative is excluded."
+NON_PERSON_SUBJECT_PATTERN = re.compile(
+    r"\b(?:advert(?:isement|orial|ising)?|brand|campaign|catalogue|collection|launch(?:es|ed|ing)?|"
+    r"lookbook|product|presents?|store|wedding\s+signatures?)\b|\bon\s+(?:instagram|tiktok|youtube)\b",
+    re.I,
+)
+KNOWN_CELEBRITY_HANDLES = {
+    "aishwaryaraibachchan_arb": "Aishwarya Rai",
+    "aliaabhatt": "Alia Bhatt",
+    "ananyapanday": "Ananya Panday",
+    "deepikapadukone": "Deepika Padukone",
+    "janhvikapoor": "Janhvi Kapoor",
+    "kareenakapoorkhan": "Kareena Kapoor Khan",
+    "kiaraaliaadvani": "Kiara Advani",
+    "kritisanon": "Kriti Sanon",
+    "priyankachopra": "Priyanka Chopra",
+    "ranveersingh": "Ranveer Singh",
+    "saraalikhan95": "Sara Ali Khan",
+    "shahidkapoor": "Shahid Kapoor",
+    "siddhantchaturvedi": "Siddhant Chaturvedi",
+    "sreeleela14": "Sreeleela",
+    "varundvn": "Varun Dhawan",
+    "vickykaushal09": "Vicky Kaushal",
+}
+KNOWN_DESIGNER_HANDLES = {
+    "manishmalhotra": "Manish Malhotra",
+    "manishmalhotraworld": "Manish Malhotra",
+    "ysl": "Saint Laurent",
+}
 FIELD_BOUNDARY = re.compile(
     r"\b(?:stylist|jewell?ery|shoes?|footwear|hair|make ?up|hmu|photograph(?:er|y)|submitted by)\s*[:\-]",
     re.I,
@@ -40,6 +71,7 @@ STOPWORDS = {
 }
 COLLAGE_LAYOUT_VERSION = 4
 MATCHER_VERSION = CURRENT_MATCHER_VERSION
+MATCH_TIME_SCOPE = "all_time"
 MIN_SOURCE_IMAGE_EDGE = 320
 
 GARMENT_LANDMARKS = {
@@ -48,14 +80,23 @@ GARMENT_LANDMARKS = {
     "gown": {"gown"},
     "dress": {"dress", "mini dress", "midi dress", "maxi dress"},
     "pantsuit": {"pantsuit", "pant suit", "power suit"},
+    "suit": {"suit", "two piece suit", "three piece suit", "tailoring", "tailored"},
+    "tuxedo": {"tuxedo", "tux"},
+    "sherwani": {"sherwani"},
+    "bandhgala": {"bandhgala", "bandh gala", "jodhpuri suit"},
+    "achkan": {"achkan"},
     "jumpsuit": {"jumpsuit"},
     "anarkali": {"anarkali"},
     "sharara": {"sharara", "gharara"},
     "kurta": {"kurta", "kurti"},
+    "co-ord": {"co ord", "co-ord", "coordinated set"},
     "skirt": {"skirt"},
+    "shorts": {"shorts"},
     "trousers": {"trousers", "pants"},
     "shirt": {"shirt", "blouse"},
     "jacket": {"jacket", "blazer"},
+    "coat": {"coat", "overcoat", "trench"},
+    "waistcoat": {"waistcoat", "vest"},
     "cape": {"cape"},
 }
 COLOR_LANDMARKS = {
@@ -100,22 +141,37 @@ def _serialized(function):
     return wrapper
 
 
-def _request(url: str, user_agent: str) -> requests.Response:
+def _request(
+    url: str,
+    user_agent: str,
+    *,
+    accept: str = "application/atom+xml,application/xml,text/html;q=0.8",
+) -> requests.Response:
     last_error: Exception | None = None
-    for attempt in range(2):
+    for attempt in range(3):
         try:
             response = requests.get(
                 url,
-                headers={"User-Agent": user_agent, "Accept": "application/atom+xml,application/xml,text/html;q=0.8"},
+                headers={"User-Agent": user_agent, "Accept": accept},
                 timeout=20,
             )
-            if response.status_code == 429 and attempt == 0:
-                time.sleep(2)
+            if response.status_code == 429 and attempt < 2:
+                retry_after = response.headers.get("Retry-After", "")
+                try:
+                    delay = min(30.0, max(2.0, float(retry_after)))
+                except ValueError:
+                    delay = 2.5 * (attempt + 1)
+                time.sleep(delay)
                 continue
             response.raise_for_status()
             return response
         except requests.RequestException as exc:
             last_error = exc
+            status = getattr(exc.response, "status_code", None)
+            if status and 400 <= status < 500 and status != 429:
+                break
+            if attempt < 2:
+                time.sleep(1.5 * (attempt + 1))
     raise AutomationError(f"Reddit request failed: {last_error}")
 
 
@@ -271,55 +327,332 @@ def _description(content_html: str) -> str:
     return re.sub(r"\s+submitted by\s*$", "", value, flags=re.I)[:3000]
 
 
+def _feed_entry_post(entry: dict) -> dict | None:
+    content_html = ""
+    if entry.get("content"):
+        content_html = entry["content"][0].get("value", "")
+    elif entry.get("summary"):
+        content_html = entry["summary"]
+    title = " ".join(entry.get("title", "").split())
+    if not title or title.casefold().startswith(BLOCKED_TITLE_PREFIXES):
+        return None
+    media = _entry_media(content_html, entry)
+    if not media:
+        return None
+    published = None
+    if entry.get("published_parsed"):
+        published = datetime.fromtimestamp(calendar.timegm(entry.published_parsed), tz=timezone.utc)
+    return {
+        "post_id": entry.get("id") or entry.get("link"),
+        "title": title,
+        "description": _description(content_html),
+        "permalink": entry.get("link", ""),
+        "author": str(entry.get("author", "unknown")).replace("/u/", "").strip(),
+        "published": published,
+        "image_urls": media,
+    }
+
+
 def _parse_feed(content: bytes, limit: int) -> list[dict]:
+    """Parse the requested number of entries without the former 25-post cap."""
     feed = feedparser.parse(content)
     posts: list[dict] = []
-    for entry in feed.entries[: max(1, min(limit, 25))]:
-        content_html = ""
-        if entry.get("content"):
-            content_html = entry["content"][0].get("value", "")
-        elif entry.get("summary"):
-            content_html = entry["summary"]
-        title = " ".join(entry.get("title", "").split())
-        if not title or title.casefold().startswith(BLOCKED_TITLE_PREFIXES):
-            continue
-        media = _entry_media(content_html, entry)
-        if not media:
-            continue
-        published = None
-        if entry.get("published_parsed"):
-            published = datetime.fromtimestamp(calendar.timegm(entry.published_parsed), tz=timezone.utc)
-        posts.append(
-            {
-                "post_id": entry.get("id") or entry.get("link"),
-                "title": title,
-                "description": _description(content_html),
-                "permalink": entry.get("link", ""),
-                "author": str(entry.get("author", "unknown")).replace("/u/", "").strip(),
-                "published": published,
-                "image_urls": media,
-            }
-        )
+    for entry in feed.entries[: max(1, limit)]:
+        post = _feed_entry_post(entry)
+        if post:
+            posts.append(post)
     return posts
 
 
-def fetch_reddit_feed(subreddit: str, limit: int, user_agent: str) -> list[dict]:
-    response = _request(f"https://www.reddit.com/r/{subreddit}/new/.rss", user_agent)
-    posts = _parse_feed(response.content, limit)
+def _clean_media_urls(candidates: list[str]) -> list[str]:
+    clean: list[str] = []
+    seen: set[str] = set()
+    for raw in candidates:
+        candidate = _prefer_original(raw)
+        if not candidate or candidate in seen:
+            continue
+        parsed = urlparse(candidate)
+        host = (parsed.hostname or "").lower()
+        path = parsed.path.lower()
+        if host.endswith("redditstatic.com") or "emoji" in candidate.lower():
+            continue
+        if host not in {"i.redd.it", "preview.redd.it", "external-preview.redd.it"} and not path.endswith((".jpg", ".jpeg", ".png", ".webp", ".gif")):
+            continue
+        seen.add(candidate)
+        clean.append(candidate)
+    return clean[:20]
+
+
+def _reddit_json_media(data: dict) -> list[str]:
+    candidates: list[str] = []
+    gallery = data.get("gallery_data") if isinstance(data.get("gallery_data"), dict) else {}
+    metadata = data.get("media_metadata") if isinstance(data.get("media_metadata"), dict) else {}
+    for item in gallery.get("items", []) if isinstance(gallery.get("items"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        media = metadata.get(str(item.get("media_id")))
+        if not isinstance(media, dict):
+            continue
+        source = media.get("s") if isinstance(media.get("s"), dict) else {}
+        raw = source.get("u") or source.get("gif")
+        if raw:
+            candidates.append(str(raw))
+
+    direct = data.get("url_overridden_by_dest") or data.get("url")
+    if direct:
+        candidates.append(str(direct))
+    preview = data.get("preview") if isinstance(data.get("preview"), dict) else {}
+    for image in preview.get("images", []) if isinstance(preview.get("images"), list) else []:
+        if not isinstance(image, dict):
+            continue
+        source = image.get("source") if isinstance(image.get("source"), dict) else {}
+        if source.get("url"):
+            candidates.append(str(source["url"]))
+
+    if not candidates:
+        crossposts = data.get("crosspost_parent_list") if isinstance(data.get("crosspost_parent_list"), list) else []
+        for crosspost in crossposts[:1]:
+            if isinstance(crosspost, dict):
+                candidates.extend(_reddit_json_media(crosspost))
+    return _clean_media_urls(candidates)
+
+
+def _reddit_json_description(data: dict) -> str:
+    parts = [str(data.get("selftext") or "").strip()]
+    gallery = data.get("gallery_data") if isinstance(data.get("gallery_data"), dict) else {}
+    for item in gallery.get("items", []) if isinstance(gallery.get("items"), list) else []:
+        if isinstance(item, dict) and item.get("caption"):
+            parts.append(str(item["caption"]).strip())
+    if not any(parts):
+        crossposts = data.get("crosspost_parent_list") if isinstance(data.get("crosspost_parent_list"), list) else []
+        if crossposts and isinstance(crossposts[0], dict):
+            parts.append(str(crossposts[0].get("selftext") or "").strip())
+    return " ".join(" ".join(parts).split())[:3000]
+
+
+def _parse_reddit_listing(payload: dict) -> tuple[list[dict], list[datetime], str | None]:
+    listing = payload.get("data") if isinstance(payload, dict) and isinstance(payload.get("data"), dict) else None
+    if listing is None:
+        raise AutomationError("Reddit returned an invalid listing response")
+    children = listing.get("children") if isinstance(listing.get("children"), list) else []
+    posts: list[dict] = []
+    published_values: list[datetime] = []
+    for child in children:
+        data = child.get("data") if isinstance(child, dict) and isinstance(child.get("data"), dict) else None
+        if data is None:
+            continue
+        try:
+            published = datetime.fromtimestamp(float(data.get("created_utc")), tz=timezone.utc)
+        except (TypeError, ValueError, OSError):
+            continue
+        published_values.append(published)
+        title = " ".join(str(data.get("title") or "").split())
+        if not title or title.casefold().startswith(BLOCKED_TITLE_PREFIXES):
+            continue
+        media = _reddit_json_media(data)
+        if not media:
+            continue
+        permalink = str(data.get("permalink") or "")
+        if permalink.startswith("/"):
+            permalink = f"https://www.reddit.com{permalink}"
+        posts.append({
+            "post_id": str(data.get("name") or data.get("id") or permalink),
+            "title": title,
+            "description": _reddit_json_description(data),
+            "permalink": permalink,
+            "author": str(data.get("author") or "unknown").strip(),
+            "published": published,
+            "image_urls": media,
+        })
+    after = listing.get("after")
+    return posts, published_values, str(after) if after else None
+
+
+def _source_timezone(name: str) -> ZoneInfo:
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise AutomationError(f"Invalid Reddit daily timezone: {name}") from exc
+
+
+def _fetch_reddit_daily_json(
+    subreddit: str,
+    target_date: date,
+    timezone_name: str,
+    page_size: int,
+    max_pages: int,
+    user_agent: str,
+) -> tuple[list[dict], int]:
+    source_timezone = _source_timezone(timezone_name)
+    after: str | None = None
+    seen_after: set[str] = set()
+    selected: dict[str, dict] = {}
+    pages = 0
+    reached_older_post = False
+    safe_page_size = max(1, min(page_size, 100))
+
+    while pages < max(1, max_pages):
+        parameters = {"limit": safe_page_size, "raw_json": 1}
+        if after:
+            parameters["after"] = after
+        response = _request(
+            f"https://www.reddit.com/r/{subreddit}/new.json?{urlencode(parameters)}",
+            user_agent,
+            accept="application/json",
+        )
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise AutomationError("Reddit JSON listing was not valid JSON") from exc
+        posts, published_values, next_after = _parse_reddit_listing(payload)
+        pages += 1
+        for post in posts:
+            published = post.get("published")
+            if published and published.astimezone(source_timezone).date() == target_date:
+                selected.setdefault(post["post_id"], post)
+        if published_values and min(value.astimezone(source_timezone).date() for value in published_values) < target_date:
+            reached_older_post = True
+            break
+        if not next_after:
+            reached_older_post = True
+            break
+        if next_after in seen_after:
+            raise AutomationError("Reddit listing pagination repeated a page token")
+        seen_after.add(next_after)
+        after = next_after
+
+    if not reached_older_post:
+        raise AutomationError(
+            f"Reddit daily listing exceeded the {max_pages}-page safety boundary before reaching {target_date.isoformat()}"
+        )
+    return list(selected.values()), pages
+
+
+def _fetch_reddit_daily_rss(
+    subreddit: str,
+    target_date: date,
+    timezone_name: str,
+    page_size: int,
+    max_pages: int,
+    user_agent: str,
+) -> tuple[list[dict], int]:
+    source_timezone = _source_timezone(timezone_name)
+    safe_page_size = max(1, min(page_size, 100))
+    next_url: str | None = f"https://www.reddit.com/r/{subreddit}/new/.rss?{urlencode({'limit': safe_page_size})}"
+    seen_pages: set[str] = set()
+    selected: dict[str, dict] = {}
+    pages = 0
+    reached_older_post = False
+
+    while next_url and pages < max(1, max_pages):
+        if next_url in seen_pages:
+            raise AutomationError("Reddit RSS pagination repeated a page URL")
+        seen_pages.add(next_url)
+        response = _request(next_url, user_agent)
+        feed = feedparser.parse(response.content)
+        pages += 1
+        published_values: list[datetime] = []
+        for entry in feed.entries:
+            if entry.get("published_parsed"):
+                published_values.append(datetime.fromtimestamp(calendar.timegm(entry.published_parsed), tz=timezone.utc))
+            post = _feed_entry_post(entry)
+            if post and post["published"] and post["published"].astimezone(source_timezone).date() == target_date:
+                selected.setdefault(post["post_id"], post)
+        if published_values and min(value.astimezone(source_timezone).date() for value in published_values) < target_date:
+            reached_older_post = True
+            break
+        next_link = None
+        for link in feed.feed.get("links", []) or []:
+            if link.get("rel") == "next" and link.get("href"):
+                parsed = urlparse(str(link["href"]))
+                if parsed.scheme == "https" and (parsed.hostname or "").lower().endswith("reddit.com"):
+                    next_link = str(link["href"])
+                    break
+        if not next_link:
+            if len(feed.entries) < safe_page_size:
+                reached_older_post = True
+                break
+            raise AutomationError("Reddit RSS did not expose the next page before the daily boundary")
+        next_url = next_link
+
+    if not reached_older_post:
+        raise AutomationError(
+            f"Reddit RSS exceeded the {max_pages}-page safety boundary before reaching {target_date.isoformat()}"
+        )
+    return list(selected.values()), pages
+
+
+def fetch_reddit_daily_posts(
+    subreddit: str,
+    user_agent: str,
+    *,
+    target_date: date | None = None,
+    timezone_name: str = "Asia/Kolkata",
+    page_size: int = 100,
+    max_pages: int = 50,
+) -> tuple[list[dict], dict]:
+    """Fetch every image post on a local calendar day, following listing pages.
+
+    Reddit JSON is preferred because it provides deterministic pagination and
+    full gallery metadata. Anonymous RSS remains a credential-free fallback.
+    The function raises instead of silently returning a truncated day.
+    """
+    source_timezone = _source_timezone(timezone_name)
+    selected_date = target_date or datetime.now(source_timezone).date()
+    provider = "reddit_json"
+    json_error = None
+    try:
+        posts, pages = _fetch_reddit_daily_json(
+            subreddit, selected_date, timezone_name, page_size, max_pages, user_agent
+        )
+    except AutomationError as exc:
+        json_error = str(exc)
+        provider = "reddit_rss_fallback"
+        posts, pages = _fetch_reddit_daily_rss(
+            subreddit, selected_date, timezone_name, page_size, max_pages, user_agent
+        )
+
     for post in posts:
         expanded = _expand_reddit_post_media(post["permalink"], user_agent)
         if expanded:
             post["image_urls"] = expanded
             post["gallery_expanded"] = True
         else:
-            post["gallery_expanded"] = False
+            post["gallery_expanded"] = len(post["image_urls"]) > 1
+    return posts, {
+        "target_date": selected_date.isoformat(),
+        "timezone": timezone_name,
+        "listing_provider": provider,
+        "pages_scanned": pages,
+        "complete_day_scan": True,
+        "json_fallback_reason": json_error,
+    }
+
+
+def fetch_reddit_feed(subreddit: str, limit: int, user_agent: str) -> list[dict]:
+    """Backward-compatible bounded feed helper used outside daily intake."""
+    requested = max(1, min(limit, 100))
+    response = _request(
+        f"https://www.reddit.com/r/{subreddit}/new/.rss?{urlencode({'limit': requested})}",
+        user_agent,
+    )
+    posts = _parse_feed(response.content, requested)
+    for post in posts:
+        expanded = _expand_reddit_post_media(post["permalink"], user_agent)
+        if expanded:
+            post["image_urls"] = expanded
+            post["gallery_expanded"] = True
+        else:
+            post["gallery_expanded"] = len(post["image_urls"]) > 1
     return posts
 
 
 def search_reddit_feed(subreddit: str, query: str, limit: int, user_agent: str) -> list[dict]:
-    parameters = urlencode({"q": query, "restrict_sr": "on", "sort": "relevance", "t": "all"})
+    """Search the full Reddit history; relevance is never restricted by age."""
+    requested = max(1, min(limit, 100))
+    parameters = urlencode({"q": query, "restrict_sr": "on", "sort": "relevance", "t": "all", "limit": requested})
     response = _request(f"https://www.reddit.com/r/{subreddit}/search.rss?{parameters}", user_agent)
-    return _parse_feed(response.content, limit)
+    return _parse_feed(response.content, requested)
 
 
 def _clean_field(value: str, limit: int = 180) -> str:
@@ -331,8 +664,7 @@ def _clean_designer(value: str) -> str:
     candidate = _clean_field(value).replace("@", "").strip()
     candidate = re.sub(r"\s*(?:,|&)\s*", " + ", candidate)
     candidate = re.sub(r"\s*\+\s*", " + ", candidate)
-    known_handles = {"manishmalhotra": "Manish Malhotra"}
-    return known_handles.get(candidate.casefold(), candidate)
+    return KNOWN_DESIGNER_HANDLES.get(candidate.casefold(), candidate)
 
 
 def _designer_from_description(description: str) -> str:
@@ -352,6 +684,22 @@ def _designer_from_description(description: str) -> str:
         names = [_clean_designer(shirt.group(1)), _clean_designer(lower.group(1))]
         return " + ".join(name for name in names if name)
 
+    social_handle = re.search(r"\b(?:wearing|dressed\s+in)\s+@([a-z0-9._]+)", description, re.I)
+    if social_handle:
+        candidate = _clean_designer(social_handle.group(1))
+        if candidate:
+            return candidate
+
+    named_designer = re.search(
+        r"\bdesigner\s+([a-z][a-z .&'-]{2,60}?)(?:(?:'s|’s)\b|\s+(?:exclusive|new|collection|label)\b)",
+        description,
+        re.I,
+    )
+    if named_designer:
+        candidate = _clean_designer(named_designer.group(1))
+        if candidate:
+            return candidate
+
     patterns = (
         r"\bclothing\s+designers?\s*[:\-–—]+\s*([^.;\n]+)",
         r"\bwearing\s+designer\s*[:\-–—]?\s*@?([^.;\n]+)",
@@ -367,23 +715,48 @@ def _designer_from_description(description: str) -> str:
     return "Unknown"
 
 
+def _social_caption_identity(title: str, description: str) -> tuple[str | None, str | None]:
+    combined = f"{title} {description}"
+    canonical_handles = {
+        handle.casefold().replace(".", "_"): name
+        for handle, name in KNOWN_CELEBRITY_HANDLES.items()
+    }
+    for raw_handle in re.findall(r"@([a-z0-9._]+)", combined, re.I):
+        person = canonical_handles.get(raw_handle.casefold().replace(".", "_"))
+        if not person:
+            continue
+        event_match = re.search(
+            rf"@{re.escape(raw_handle)}\s+for\s+(.+?)(?=\s+(?:wearing|wears?|dressed|styled)\b|[.!\n]|$)",
+            combined,
+            re.I,
+        )
+        event = _clean_field(event_match.group(1), 240) if event_match else None
+        return person, event
+    return None, None
+
+
 def parse_outfit(title: str, description: str) -> dict[str, str]:
     clean = re.sub(r"\s+", " ", title.replace("|", " ")).strip()
     person = "Unresolved"
     designer = "Unknown"
     event = "Unresolved"
+    social_person, social_event = _social_caption_identity(clean, description)
+    if social_person:
+        person = social_person
+    if social_event:
+        event = social_event
 
     question = re.match(r"^how\s+does\s+(.+?)\s+make\b", clean, re.I)
     campaign = re.match(r"^(.+?)(?:'s|’s)\s+(?:latest\s+)?campaign(?:\s+for\s+(.+))?$", clean, re.I)
-    if question:
+    if question and not social_person:
         person = _clean_field(question.group(1))
-    elif campaign:
+    elif campaign and not social_person:
         person = _clean_field(campaign.group(1))
         if campaign.group(2):
             event = _clean_field(campaign.group(2), 240)
 
     match = re.match(r"^(.+?)\s+(?:in|wearing)\s+(.+?)(?:\s+(?:for|at|during)\s+(.+))?$", clean, re.I)
-    if match:
+    if match and not social_person:
         person = _clean_field(match.group(1))
         proposed_designer = _clean_field(match.group(2))
         if not re.match(r"^(?:a|an|the)\s+", proposed_designer, re.I):
@@ -396,7 +769,7 @@ def parse_outfit(title: str, description: str) -> dict[str, str]:
         if len(boundary) > 1:
             event = _clean_field(boundary[1], 240)
 
-    body_designer = _designer_from_description(description)
+    body_designer = _designer_from_description(f"{clean}. {description}")
     if designer.casefold() in UNKNOWN_VALUES and body_designer.casefold() not in UNKNOWN_VALUES:
         designer = body_designer
     return {
@@ -413,15 +786,23 @@ def _refresh_case_metadata(case: Case) -> dict[str, dict[str, str]]:
     malformed_person = (
         case.celebrity.casefold().startswith("how does ")
         or "latest campaign" in case.celebrity.casefold()
+        or " on instagram" in case.celebrity.casefold()
+        or " on tiktok" in case.celebrity.casefold()
         or case.celebrity.casefold() in UNKNOWN_VALUES
     )
+    social_source = " on instagram" in case.source_title.casefold() or " on tiktok" in case.source_title.casefold()
     if malformed_person and parsed["celebrity"].casefold() not in UNKNOWN_VALUES:
         changes["celebrity"] = {"from": case.celebrity, "to": parsed["celebrity"]}
         case.celebrity = parsed["celebrity"]
-    if case.designer.casefold() in UNKNOWN_VALUES and parsed["designer"].casefold() not in UNKNOWN_VALUES:
+    malformed_designer = (
+        case.designer.casefold() in UNKNOWN_VALUES
+        or any(handle in case.designer.casefold().replace("@", "") for handle in KNOWN_CELEBRITY_HANDLES)
+    )
+    if malformed_designer and parsed["designer"].casefold() not in UNKNOWN_VALUES:
         changes["designer"] = {"from": case.designer, "to": parsed["designer"]}
         case.designer = parsed["designer"]
-    if case.event_name.casefold() in UNKNOWN_VALUES and parsed["event"].casefold() not in UNKNOWN_VALUES:
+    malformed_event = case.event_name.casefold() in UNKNOWN_VALUES or (social_source and len(case.event_name) > 120)
+    if malformed_event and parsed["event"].casefold() not in UNKNOWN_VALUES:
         changes["event"] = {"from": case.event_name, "to": parsed["event"]}
         case.event_name = parsed["event"]
 
@@ -439,6 +820,27 @@ def _refresh_case_metadata(case: Case) -> dict[str, dict[str, str]]:
             case.status = "review_ready"
             case.confidence = max(case.confidence, 0.78)
     return changes
+
+
+def refresh_existing_case_metadata(db: Session) -> int:
+    """Apply improved deterministic parsing to existing malformed records."""
+    refreshed = 0
+    cases = db.scalars(select(Case).where(Case.demo_data.is_(False))).all()
+    for case in cases:
+        changes = _refresh_case_metadata(case)
+        if not changes:
+            continue
+        refreshed += 1
+        db.add(AuditEvent(
+            entity_type="case",
+            entity_id=case.id,
+            action="metadata_parser_refreshed",
+            actor="system-migration",
+            detail={"changes": changes},
+        ))
+    if refreshed:
+        db.commit()
+    return refreshed
 
 
 def _usable_image_file(path: Path) -> bool:
@@ -495,6 +897,125 @@ def _canonical(value: str) -> str:
     value = value.casefold().replace("’", "'")
     value = re.sub(r"^custom\s+", "", value)
     return re.sub(r"[^a-z0-9]+", " ", value).strip()
+
+
+def editorial_subject_eligibility(
+    title: str,
+    description: str = "",
+    celebrity: str | None = None,
+) -> tuple[bool, str]:
+    """Require a named person without rejecting valid celebrity campaigns."""
+    subject = _clean_field(celebrity or parse_outfit(title, description)["celebrity"])
+    subject_key = _canonical(subject)
+    if subject_key in UNKNOWN_VALUES or not re.search(r"[a-z]", subject_key):
+        return False, "individual_subject_unresolved"
+
+    # Campaign words are allowed in the source headline, but never in the
+    # parsed person field. Their presence here means the parser treated a
+    # brand/campaign headline as a celebrity (for example, the Tanishq post).
+    if NON_PERSON_SUBJECT_PATTERN.search(subject):
+        return False, "individual_subject_not_identified"
+
+    title_key = _canonical(title)
+    subject_words = re.findall(r"[A-Za-z][A-Za-z'\u2019.-]*", subject)
+    if subject_key == title_key and (
+        len(subject_words) > 7
+        or bool(re.search(r"[.!?\"\u201c\u201d]", subject))
+    ):
+        return False, "individual_subject_not_identified"
+    return True, "identified_person"
+
+
+def case_content_eligible(case: Case) -> bool:
+    return editorial_subject_eligibility(
+        case.source_title,
+        case.source_body,
+        case.celebrity,
+    )[0]
+
+
+def _apply_case_subject_policy(case: Case) -> tuple[bool, str, bool]:
+    """Persist exclusions while keeping the record available for audit."""
+    eligible, reason = editorial_subject_eligibility(
+        case.source_title,
+        case.source_body,
+        case.celebrity,
+    )
+    extraction = case.extraction if isinstance(case.extraction, dict) else {}
+    raw_previous = extraction.get("content_policy")
+    previous = raw_previous if isinstance(raw_previous, dict) else {}
+
+    if eligible:
+        if previous.get("eligible") is not False:
+            return eligible, reason, False
+        case.status = str(previous.get("previous_status") or (
+            "review_ready" if _canonical(case.designer) not in UNKNOWN_VALUES else "context_review"
+        ))
+        case.match_type = str(previous.get("previous_match_type") or "source_only")
+        case.confidence = float(previous.get("previous_confidence") or 0)
+        case.extraction = {
+            **extraction,
+            "content_policy": {
+                "version": SUBJECT_POLICY_VERSION,
+                "eligible": True,
+                "reason": reason,
+                "rule": SUBJECT_POLICY_RULE,
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+            },
+        }
+        return eligible, reason, True
+
+    correctly_excluded = (
+        previous.get("version") == SUBJECT_POLICY_VERSION
+        and previous.get("eligible") is False
+        and previous.get("reason") == reason
+        and case.status == "auto_rejected"
+        and case.match_type == "excluded_unidentified_subject"
+    )
+    if correctly_excluded:
+        return eligible, reason, False
+
+    previous_status = previous.get("previous_status") if previous.get("eligible") is False else case.status
+    previous_match_type = previous.get("previous_match_type") if previous.get("eligible") is False else case.match_type
+    previous_confidence = previous.get("previous_confidence") if previous.get("eligible") is False else case.confidence
+    case.status = "auto_rejected"
+    case.match_type = "excluded_unidentified_subject"
+    case.confidence = 0
+    case.extraction = {
+        **extraction,
+        "content_policy": {
+            "version": SUBJECT_POLICY_VERSION,
+            "eligible": False,
+            "reason": reason,
+            "rule": SUBJECT_POLICY_RULE,
+            "previous_status": previous_status,
+            "previous_match_type": previous_match_type,
+            "previous_confidence": previous_confidence,
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+        },
+    }
+    return eligible, reason, True
+
+
+def refresh_existing_content_policy(db: Session) -> int:
+    """Hide existing anonymous campaign creative without deleting audit data."""
+    changed_count = 0
+    cases = db.scalars(select(Case).where(Case.demo_data.is_(False))).all()
+    for case in cases:
+        eligible, reason, changed = _apply_case_subject_policy(case)
+        if not changed:
+            continue
+        changed_count += 1
+        db.add(AuditEvent(
+            entity_type="case",
+            entity_id=case.id,
+            action="person_subject_restored" if eligible else "unidentified_subject_excluded",
+            actor="system-migration",
+            detail={"reason": reason, "rule": SUBJECT_POLICY_RULE},
+        ))
+    if changed_count:
+        db.commit()
+    return changed_count
 
 
 def _text_tokens(title: str, body: str, celebrity: str, designer: str) -> set[str]:
@@ -642,6 +1163,7 @@ def _visual_similarity(left_path: str, right_path: str, media_dir: str) -> float
 
 
 def _historical_matches(db: Session, case: Case, media_dir: str, limit: int = 3) -> list[tuple[Case, float, float, float, dict]]:
+    """Match against the entire retained archive without a date cutoff."""
     if _canonical(case.designer) in UNKNOWN_VALUES:
         return []
     archive = db.scalars(
@@ -653,6 +1175,8 @@ def _historical_matches(db: Session, case: Case, media_dir: str, limit: int = 3)
     current_tokens = _tokens(case)
     scored: list[tuple[Case, float, float, float, dict]] = []
     for prior in archive:
+        if not case_content_eligible(prior):
+            continue
         if _canonical(prior.designer) != _canonical(case.designer):
             continue
         prior_tokens = _tokens(prior)
@@ -896,29 +1420,57 @@ def _same_file(left_path: str, right_path: str, media_dir: str) -> bool:
     return hashlib.sha256(left.read_bytes()).digest() == hashlib.sha256(right.read_bytes()).digest()
 
 
+def _designer_term_groups(designer: str) -> list[tuple[set[str], str]]:
+    groups: list[tuple[set[str], str]] = []
+    for label in re.split(r"\s*(?:\+|&|,)\s*", designer):
+        ordered_terms = [
+            token for token in _canonical(label).split()
+            if len(token) >= 3 and token not in {"custom", "couture", "label", "labels", "the", "and", "for"}
+        ]
+        if ordered_terms:
+            groups.append((set(ordered_terms), "".join(ordered_terms)))
+    return groups
+
+
+def _reddit_match_query(case: Case) -> tuple[str, list[str]]:
+    signature = _outfit_signature(case.source_title, case.source_body)
+    weighted = [
+        *sorted(signature["garments"]),
+        *sorted(signature["details"]),
+        *sorted(signature["colors"]),
+    ]
+    available_context = _tokens(case)
+    source_order = _canonical(f"{case.source_title} {case.source_body}").split()
+    context = [token for token in source_order if token in available_context]
+    terms: list[str] = []
+    for term in [*weighted, *context]:
+        if term not in terms:
+            terms.append(term)
+        if len(terms) >= 8:
+            break
+    primary_designer = re.split(r"\s*(?:\+|&|,)\s*", case.designer, maxsplit=1)[0].strip()
+    designer_query = f'"{primary_designer}"' if " " in primary_designer else primary_designer
+    return " ".join([designer_query, *terms])[:420], terms
+
+
 def _remote_reddit_matches(db: Session, case: Case, settings, *, limit: int = 3) -> tuple[list[Candidate], dict]:
     designer_key = _canonical(case.designer)
     if designer_key in UNKNOWN_VALUES:
-        return [], {"status": "skipped", "reason": "designer_unresolved", "selected": 0}
+        return [], {"status": "skipped", "reason": "designer_unresolved", "time_scope": MATCH_TIME_SCOPE, "selected": 0}
 
-    signature = _outfit_signature(case.source_title, case.source_body)
-    signature_terms = sorted(set().union(*signature.values()))
-    context_terms = [*signature_terms, *sorted(_tokens(case))]
     # Do not put the current celebrity in the query: doing so suppresses the
     # very "same outfit, other celebrity" posts this workflow must discover.
-    query = " ".join([case.designer, *context_terms[:8]])[:420]
+    query, query_terms = _reddit_match_query(case)
     try:
         # Reddit rate-limits anonymous RSS search. One bounded query per outfit
         # with a pause is reliable and respectful enough for the daily job.
         time.sleep(1.25)
-        posts = search_reddit_feed(settings.reddit_subreddit, query, 12, settings.reddit_user_agent)
+        search_limit = max(1, min(int(getattr(settings, "reddit_match_search_limit", 100)), 100))
+        posts = search_reddit_feed(settings.reddit_subreddit, query, search_limit, settings.reddit_user_agent)
     except AutomationError as exc:
-        return [], {"status": "unavailable", "query": query, "error": str(exc)[:240], "selected": 0}
+        return [], {"status": "unavailable", "query": query, "query_terms": query_terms, "time_scope": MATCH_TIME_SCOPE, "error": str(exc)[:240], "selected": 0}
 
-    expected_designer_terms = {
-        token for token in designer_key.split()
-        if len(token) >= 3 and token not in {"custom", "couture", "label", "labels", "the", "and", "for"}
-    }
+    expected_designer_groups = _designer_term_groups(case.designer)
     candidate_rows = db.scalars(select(Candidate).where(Candidate.case_id == case.id)).all()
     existing_urls = {
         evidence.get("url")
@@ -933,9 +1485,21 @@ def _remote_reddit_matches(db: Session, case: Case, settings, *, limit: int = 3)
         if post["permalink"] == case.permalink or post["permalink"] in existing_urls or not post["image_urls"]:
             continue
         search_text = _canonical(f"{post['title']} {post['description']}")
-        if expected_designer_terms and not expected_designer_terms.issubset(set(search_text.split())):
+        search_tokens = set(search_text.split())
+        designer_supported = any(
+            group.issubset(search_tokens) or compact in search_tokens
+            for group, compact in expected_designer_groups
+        )
+        if expected_designer_groups and not designer_supported:
             continue
         outfit = parse_outfit(post["title"], post["description"])
+        eligible, _ = editorial_subject_eligibility(
+            post["title"],
+            post["description"],
+            outfit["celebrity"],
+        )
+        if not eligible:
+            continue
         result_tokens = _text_tokens(post["title"], post["description"], outfit["celebrity"], case.designer)
         union = current_tokens | result_tokens
         text_score = len(current_tokens & result_tokens) / len(union) if union else 0.0
@@ -1004,7 +1568,7 @@ def _remote_reddit_matches(db: Session, case: Case, settings, *, limit: int = 3)
         if len(selected) >= limit:
             break
     db.flush()
-    return selected, {"status": "completed", "query": query, "results": len(posts), "selected": len(selected)}
+    return selected, {"status": "completed", "query": query, "query_terms": query_terms, "time_scope": MATCH_TIME_SCOPE, "results": len(posts), "selected": len(selected)}
 
 
 def _add_matches(db: Session, case: Case, media_dir: str) -> list[Candidate]:
@@ -1090,6 +1654,8 @@ def _supersede_legacy_matches(db: Session, case: Case) -> int:
 
 
 def _research_existing_case(db: Session, case: Case, settings, static_dir: str, *, allow_remote: bool = True) -> dict:
+    if not case_content_eligible(case):
+        raise AutomationError("Archive research requires a clearly identified person in the source post")
     metadata_changes = _refresh_case_metadata(case)
     superseded_matches = _supersede_legacy_matches(db, case)
     reference = {"status": "skipped", "reason": "designer_unresolved", "selected": 0}
@@ -1108,6 +1674,7 @@ def _research_existing_case(db: Session, case: Case, settings, static_dir: str, 
         "archive_search": {
             **remote_meta,
             "checked_at": datetime.now(timezone.utc).isoformat(),
+            "time_scope": MATCH_TIME_SCOPE,
             "local_selected": len(local_candidates),
             "title_and_description_used": True,
             "matcher_version": MATCHER_VERSION,
@@ -1224,6 +1791,16 @@ def import_public_post_automation(db: Session, payload: dict, settings, static_d
             override = _clean_text_hint(payload.get(payload_key), 240 if payload_key == "event_name" else 180)
             if override:
                 outfit[outfit_key] = override
+        eligible, _ = editorial_subject_eligibility(
+            title,
+            description,
+            outfit["celebrity"],
+        )
+        if not eligible:
+            raise PublicSourceError(
+                "This post was not imported because no clearly identified person could be confirmed. "
+                "Add the person's name in the celebrity field and try again if the campaign does feature a known individual."
+            )
 
         retrieved_at = datetime.now(timezone.utc).isoformat()
         post = {
@@ -1488,8 +2065,17 @@ def migrate_legacy_matcher_outputs(db: Session, settings, static_dir: str) -> in
 
 
 @_serialized
-def run_daily_automation(db: Session, settings, static_dir: str, *, trigger: str = "editor") -> dict:
-    key = f"daily-reddit:{datetime.now(timezone.utc).strftime('%Y-%m-%d')}:{trigger}"
+def run_daily_automation(
+    db: Session,
+    settings,
+    static_dir: str,
+    *,
+    trigger: str = "editor",
+    target_date: date | None = None,
+) -> dict:
+    source_timezone = _source_timezone(settings.reddit_daily_timezone)
+    selected_date = target_date or datetime.now(source_timezone).date()
+    key = f"daily-reddit:{selected_date.isoformat()}:{trigger}"
     existing_run = db.scalar(select(JobRun).where(JobRun.idempotency_key == key))
     if existing_run and trigger == "scheduler" and existing_run.status == "completed":
         return {"job_id": existing_run.id, "status": "completed", "already_ran": True, "created": 0, "case_ids": []}
@@ -1505,9 +2091,17 @@ def run_daily_automation(db: Session, settings, static_dir: str, *, trigger: str
         db.add(run)
     db.commit()
 
-    summary = {"job_id": run.id, "status": "running", "found": 0, "created": 0, "skipped": 0, "failed": 0, "researched": 0, "matches": 0, "collages": 0, "case_ids": []}
+    summary = {"job_id": run.id, "status": "running", "target_date": selected_date.isoformat(), "found": 0, "created": 0, "skipped": 0, "excluded": 0, "failed": 0, "researched": 0, "matches": 0, "collages": 0, "case_ids": []}
     try:
-        posts = fetch_reddit_feed(settings.reddit_subreddit, settings.daily_automation_limit, settings.reddit_user_agent)
+        posts, feed_metadata = fetch_reddit_daily_posts(
+            settings.reddit_subreddit,
+            settings.reddit_user_agent,
+            target_date=selected_date,
+            timezone_name=settings.reddit_daily_timezone,
+            page_size=settings.reddit_listing_page_size,
+            max_pages=settings.reddit_listing_max_pages,
+        )
+        summary.update(feed_metadata)
         summary["found"] = len(posts)
         retrieved_at = datetime.now(timezone.utc).isoformat()
         remote_searches_used = 0
@@ -1515,7 +2109,28 @@ def run_daily_automation(db: Session, settings, static_dir: str, *, trigger: str
         designer_searches_used = 0
         designer_search_budget = max(0, settings.daily_designer_search_budget)
         for post in posts:
+            outfit = parse_outfit(post["title"], post["description"])
             existing = db.scalar(select(Case).where((Case.external_id == post["post_id"]) | (Case.permalink == post["permalink"])))
+            subject = existing.celebrity if existing else outfit["celebrity"]
+            eligible, reason = editorial_subject_eligibility(
+                post["title"],
+                post["description"],
+                subject,
+            )
+            if not eligible:
+                summary["excluded"] += 1
+                if existing:
+                    _, _, changed = _apply_case_subject_policy(existing)
+                    if changed:
+                        db.add(AuditEvent(
+                            entity_type="case",
+                            entity_id=existing.id,
+                            action="unidentified_subject_excluded",
+                            actor="daily-automation",
+                            detail={"reason": reason, "rule": SUBJECT_POLICY_RULE},
+                        ))
+                        db.commit()
+                continue
             if existing:
                 summary["skipped"] += 1
                 existing_extraction = existing.extraction if isinstance(existing.extraction, dict) else {}
@@ -1561,11 +2176,10 @@ def run_daily_automation(db: Session, settings, static_dir: str, *, trigger: str
             if not downloaded:
                 summary["failed"] += 1
                 continue
-            outfit = parse_outfit(post["title"], post["description"])
             published = post["published"]
             extraction = {
                 "automated": True,
-                "provider": "reddit_rss",
+                "provider": feed_metadata["listing_provider"],
                 "author": post["author"],
                 "retrieved_at": retrieved_at,
                 "search_basis": {"title": post["title"], "description": post["description"]},
@@ -1585,7 +2199,7 @@ def run_daily_automation(db: Session, settings, static_dir: str, *, trigger: str
                 celebrity=outfit["celebrity"],
                 designer=outfit["designer"],
                 event_name=outfit["event"],
-                event_date=published.date().isoformat() if published else None,
+                event_date=published.astimezone(source_timezone).date().isoformat() if published else None,
                 status="review_ready" if known_designer else "context_review",
                 match_type="source_only",
                 confidence=0.84 if known_designer else 0.56,
@@ -1614,6 +2228,7 @@ def run_daily_automation(db: Session, settings, static_dir: str, *, trigger: str
                 "archive_search": {
                     "status": "deferred" if known_designer else "skipped",
                     "reason": "daily_search_queue" if known_designer else "designer_unresolved",
+                    "time_scope": MATCH_TIME_SCOPE,
                     "local_selected": len(local_candidates),
                     "title_and_description_used": True,
                 },
@@ -1654,8 +2269,10 @@ def run_daily_automation(db: Session, settings, static_dir: str, *, trigger: str
             .order_by(Case.created_at.asc())
         ).all()
         gallery_retries_used = 0
-        gallery_retry_budget = min(max(2, settings.daily_automation_limit), 8)
+        gallery_retry_budget = max(0, settings.daily_gallery_retry_budget)
         for case in research_cases:
+            if not case_content_eligible(case):
+                continue
             metadata_changes = _refresh_case_metadata(case)
             extraction = case.extraction if isinstance(case.extraction, dict) else {}
             needs_layout_refresh = extraction.get("collage_layout_version") != COLLAGE_LAYOUT_VERSION
@@ -1733,6 +2350,8 @@ def run_daily_automation(db: Session, settings, static_dir: str, *, trigger: str
         # outfits once credentials are configured.
         if settings.designer_reference_search_enabled:
             for case in research_cases:
+                if not case_content_eligible(case):
+                    continue
                 _refresh_case_metadata(case)
                 extraction = case.extraction if isinstance(case.extraction, dict) else {}
                 assets = extraction.get("collage_assets", []) if isinstance(extraction.get("collage_assets", []), list) else []

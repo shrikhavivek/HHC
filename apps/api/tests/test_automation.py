@@ -1,8 +1,18 @@
+from datetime import date, datetime, timezone
 from types import SimpleNamespace
 
 from PIL import Image
 
-from app.automation import _outfit_match_assessment, _post_page_media, _usable_image_file, parse_outfit
+from app import automation
+from app.automation import (
+    _fetch_reddit_daily_json,
+    _outfit_match_assessment,
+    _post_page_media,
+    _refresh_case_metadata,
+    _usable_image_file,
+    editorial_subject_eligibility,
+    parse_outfit,
+)
 from app.collage import render_bundle
 from app import designer_search
 from app.designer_search import find_official_designer_reference
@@ -35,6 +45,130 @@ def test_multi_brand_and_handle_descriptions_are_extracted():
         "Wearing Designer @manishmalhotra",
     )
     assert runway["designer"] == "Manish Malhotra"
+
+
+def test_campaign_policy_keeps_named_people_and_rejects_anonymous_creative():
+    arjun_title = "Arjun Kapoor’s latest campaign for Heineken India"
+    arjun = parse_outfit(arjun_title, "Clothing designers: Acne Studios")
+    assert editorial_subject_eligibility(arjun_title, "", arjun["celebrity"]) == (
+        True,
+        "identified_person",
+    )
+
+    tanishq_title = 'Rivaah Wedding Signatures by Tanishq launches new campaign “One Wedding. Many Stories.”'
+    tanishq = parse_outfit(tanishq_title, "")
+    assert editorial_subject_eligibility(tanishq_title, "", tanishq["celebrity"]) == (
+        False,
+        "individual_subject_not_identified",
+    )
+
+    # An editor can retain a campaign when a real subject is explicitly known.
+    assert editorial_subject_eligibility(tanishq_title, "", "Katrina Kaif")[0] is True
+
+
+def test_social_caption_extracts_the_subject_event_and_designer_handles():
+    parsed = parse_outfit(
+        'Eka on Instagram: "Arriving in style! @ranveersingh for BMW India Wearing @ysl Sunglasses"',
+        "@ranveersingh for BMW India Wearing @ysl Sunglasses @peterandmay",
+    )
+    assert parsed == {
+        "celebrity": "Ranveer Singh",
+        "designer": "Saint Laurent",
+        "event": "BMW India",
+    }
+
+
+def test_improved_social_parser_repairs_existing_malformed_metadata():
+    case = SimpleNamespace(
+        source_title='Eka on Instagram: "Arriving in style! @ranveersingh for BMW India Wearing @ysl Sunglasses"',
+        source_body="@ranveersingh for BMW India Wearing @ysl Sunglasses @peterandmay",
+        celebrity='Eka on Instagram: "Arriving',
+        designer="style! @ranveersingh",
+        event_name="BMW India Wearing @ysl Sunglasses followed by a very long list of styling and production credits that is not an event name at all",
+        extraction={},
+        status="context_review",
+        confidence=0.56,
+    )
+
+    changes = _refresh_case_metadata(case)
+
+    assert set(changes) == {"celebrity", "designer", "event"}
+    assert case.celebrity == "Ranveer Singh"
+    assert case.designer == "Saint Laurent"
+    assert case.event_name == "BMW India"
+    assert case.status == "review_ready"
+
+
+def test_daily_listing_follows_pages_until_the_local_day_is_complete(monkeypatch):
+    def child(post_id: str, published: datetime) -> dict:
+        return {
+            "kind": "t3",
+            "data": {
+                "name": f"t3_{post_id}",
+                "id": post_id,
+                "title": f"Look {post_id}",
+                "author": "fashion_source",
+                "created_utc": published.timestamp(),
+                "permalink": f"/r/BollywoodFashion/comments/{post_id}/look/",
+                "url_overridden_by_dest": f"https://i.redd.it/{post_id}.jpg",
+                "selftext": f"Description {post_id}",
+            },
+        }
+
+    pages = [
+        {
+            "data": {
+                "after": "t3_page_two",
+                "children": [child("late", datetime(2026, 10, 1, 18, 0, tzinfo=timezone.utc))],
+            }
+        },
+        {
+            "data": {
+                "after": "t3_older",
+                "children": [
+                    child("early", datetime(2026, 10, 1, 0, 0, tzinfo=timezone.utc)),
+                    child("previous", datetime(2026, 9, 30, 18, 0, tzinfo=timezone.utc)),
+                ],
+            }
+        },
+    ]
+
+    class Response:
+        def __init__(self, payload: dict):
+            self.payload = payload
+
+        def json(self) -> dict:
+            return self.payload
+
+    monkeypatch.setattr(automation, "_request", lambda *_args, **_kwargs: Response(pages.pop(0)))
+    posts, scanned = _fetch_reddit_daily_json(
+        "BollywoodFashion",
+        date(2026, 10, 1),
+        "Asia/Kolkata",
+        100,
+        50,
+        "test-agent",
+    )
+
+    assert scanned == 2
+    assert [post["post_id"] for post in posts] == ["t3_late", "t3_early"]
+
+
+def test_outfit_search_uses_the_full_reddit_history(monkeypatch):
+    requested: dict[str, str] = {}
+
+    class Response:
+        content = b"<rss><channel></channel></rss>"
+
+    def fake_request(url: str, *_args, **_kwargs):
+        requested["url"] = url
+        return Response()
+
+    monkeypatch.setattr(automation, "_request", fake_request)
+    automation.search_reddit_feed("BollywoodFashion", '"Example Designer" gown', 100, "test-agent")
+
+    assert "t=all" in requested["url"]
+    assert "limit=100" in requested["url"]
 
 
 def test_component_designers_are_preserved_for_a_mixed_outfit():

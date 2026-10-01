@@ -17,8 +17,11 @@ For local testing, Docker enables a temporary demo login by default:
 `hhc-demo` / `HHC-Demo-2026!`. Set `DEMO_LOGIN_ENABLED=false` before sharing or
 deploying the application, then use the client WordPress Application Password.
 
-With `REDDIT_SOURCE_MODE=rss`, the first launch immediately processes the live
-`r/BollywoodFashion` feed. It then runs every day at the configured UTC time.
+With `REDDIT_SOURCE_MODE=rss`, the first launch immediately processes every
+image post published that calendar day in `r/BollywoodFashion`. Intake follows
+Reddit listing pages until it crosses the day boundary; it is not capped at a
+fixed number of posts. The default source calendar is `Asia/Kolkata`, configured
+with `REDDIT_DAILY_TIMEZONE`. It then runs every day at the configured UTC time.
 The **Run daily automation** control is an optional run-now trigger; it is not a
 required editorial step. Repeated runs are idempotent, so the same Reddit post
 is not imported twice.
@@ -36,11 +39,13 @@ manually instead of the system inventing or scraping unrelated panels.
 For every eligible post, the runner:
 
 1. Downloads the highest-resolution Reddit-hosted source available.
-2. Uses both title and description to extract celebrity, designer, and event.
-3. Searches the retained Reddit archive using title and description evidence,
-   then requires matching designer, garment category, construction landmarks,
-   and bounded image similarity. Explicit colour or garment conflicts reject
-   a candidate instead of forcing a comparison.
+2. Uses title, description, gallery captions, social handles, and known aliases
+   to extract celebrity, designer, event, and Women/Men/Both classification.
+3. Searches the complete retained archive and up to 100 all-time Reddit search
+   results using title and description evidence; there is no age or year cutoff.
+   It then requires matching designer, garment category, construction landmarks,
+   and bounded image similarity. Explicit colour or garment conflicts reject a
+   candidate instead of forcing a comparison.
 4. Creates a multi-image collage when exact supporting sources qualify, or an
    honest source-only editorial layout when no exact match exists.
 5. Stores a full-resolution WebP/PNG, source manifest, and ZIP evidence bundle.
