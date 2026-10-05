@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     reddit_source_mode: str = "manual"
     reddit_subreddit: str = "BollywoodFashion"
     reddit_user_agent: str = "hhc-daily-drafts/2.0 (contact: admin@highheelconfidential.com)"
+    reddit_client_id: str = ""
+    reddit_client_secret: str = ""
     reddit_daily_timezone: str = "Asia/Kolkata"
     reddit_listing_page_size: int = 100
     reddit_listing_max_pages: int = 50
@@ -25,6 +27,7 @@ class Settings(BaseSettings):
     daily_automation_enabled: bool = False
     daily_gallery_retry_budget: int = 8
     daily_remote_search_budget: int = 8
+    reddit_oauth_daily_search_budget: int = 80
     daily_designer_search_budget: int = 8
     daily_automation_hour_utc: int = 3
     daily_automation_minute_utc: int = 30
@@ -38,4 +41,6 @@ def get_settings() -> Settings:
         raise RuntimeError("AUTO_APPROVE must remain false in V1")
     if settings.wordpress_publisher_enabled:
         raise RuntimeError("WordPress publishing is disabled in V1")
+    if bool(settings.reddit_client_id.strip()) != bool(settings.reddit_client_secret.strip()):
+        raise RuntimeError("REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET must be configured together")
     return settings

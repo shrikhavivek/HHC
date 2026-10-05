@@ -171,6 +171,99 @@ def test_outfit_search_uses_the_full_reddit_history(monkeypatch):
     assert "limit=100" in requested["url"]
 
 
+def test_outfit_search_uses_oauth_json_when_credentials_are_configured(monkeypatch):
+    requested: dict[str, object] = {}
+    payload = {
+        "data": {
+            "after": None,
+            "children": [{
+                "kind": "t3",
+                "data": {
+                    "name": "t3_match",
+                    "id": "match",
+                    "title": "Actor Two in Example Designer embroidered gown",
+                    "author": "fashion_source",
+                    "created_utc": datetime(2026, 9, 1, tzinfo=timezone.utc).timestamp(),
+                    "permalink": "/r/BollywoodFashion/comments/match/look/",
+                    "url_overridden_by_dest": "https://i.redd.it/match.jpg",
+                    "selftext": "The same blue embroidered gown.",
+                },
+            }],
+        },
+    }
+
+    class Response:
+        def json(self) -> dict:
+            return payload
+
+    def fake_oauth_request(path, user_agent, client_id, client_secret, *, parameters=None):
+        requested.update({
+            "path": path,
+            "user_agent": user_agent,
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "parameters": parameters,
+        })
+        return Response()
+
+    monkeypatch.setattr(automation, "_reddit_oauth_request", fake_oauth_request)
+    posts = automation.search_reddit_feed(
+        "BollywoodFashion",
+        '"Example Designer" gown',
+        100,
+        "test-agent",
+        oauth_client_id="client-id",
+        oauth_client_secret="client-secret",
+    )
+
+    assert requested["path"] == "/r/BollywoodFashion/search"
+    assert requested["parameters"]["t"] == "all"
+    assert requested["parameters"]["limit"] == 100
+    assert [post["post_id"] for post in posts] == ["t3_match"]
+
+
+def test_reddit_oauth_token_is_cached_and_sent_as_bearer(monkeypatch):
+    automation._clear_reddit_oauth_token_cache()
+    calls = {"token": 0, "api": 0}
+    headers_seen: list[dict] = []
+
+    class TokenResponse:
+        status_code = 200
+        headers: dict = {}
+
+        def raise_for_status(self):
+            return None
+
+        def json(self) -> dict:
+            return {"access_token": "test-access-token", "expires_in": 3600}
+
+    class ApiResponse:
+        status_code = 200
+        headers = {"X-Ratelimit-Remaining": "99", "X-Ratelimit-Reset": "60"}
+
+        def raise_for_status(self):
+            return None
+
+    def fake_post(*_args, **kwargs):
+        calls["token"] += 1
+        assert kwargs["auth"] == ("client-id", "client-secret")
+        return TokenResponse()
+
+    def fake_get(*_args, **kwargs):
+        calls["api"] += 1
+        headers_seen.append(kwargs["headers"])
+        return ApiResponse()
+
+    monkeypatch.setattr(automation.requests, "post", fake_post)
+    monkeypatch.setattr(automation.requests, "get", fake_get)
+    automation._reddit_oauth_request("/r/BollywoodFashion/new", "test-agent", "client-id", "client-secret")
+    automation._reddit_oauth_request("/r/BollywoodFashion/new", "test-agent", "client-id", "client-secret")
+    automation._clear_reddit_oauth_token_cache()
+
+    assert calls == {"token": 1, "api": 2}
+    assert headers_seen[0]["Authorization"] == "Bearer test-access-token"
+
+
 def test_component_designers_are_preserved_for_a_mixed_outfit():
     parsed = parse_outfit(
         "Kareena Kapoor Khan wearing a crisp white shirt for What Women Want",

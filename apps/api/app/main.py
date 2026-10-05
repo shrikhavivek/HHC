@@ -115,6 +115,8 @@ def case_json(case: Case, detail=False):
             "panels": catalog,
             "default_ids": defaults,
             "selected_ids": selected or defaults,
+            "canvas_format": edit.get("canvas_format") if edit.get("canvas_format") in {"instagram_portrait", "instagram_landscape"} else "instagram_portrait",
+            "layout_template": edit.get("layout_template") if edit.get("layout_template") in {"balanced_grid", "hero_focus", "editorial_split"} else "balanced_grid",
             "panel_options": {
                 str(panel_id): value
                 for panel_id, value in saved_options.items()
@@ -128,7 +130,7 @@ def case_json(case: Case, detail=False):
             },
             "watermark_asset": watermark_asset,
             "watermark": watermark,
-            "customized": bool(saved or watermark),
+            "customized": bool(saved or watermark or edit.get("canvas_format") or edit.get("layout_template")),
             "updated_at": edit.get("updated_at"),
             "editor_id": edit.get("editor_id"),
         }
@@ -205,7 +207,13 @@ app.mount("/media-files", StaticFiles(directory=settings.media_dir), name="media
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "auto_approve": False, "wordpress": False, "source_mode": settings.reddit_source_mode}
+    return {
+        "status": "ok",
+        "auto_approve": False,
+        "wordpress": False,
+        "source_mode": settings.reddit_source_mode,
+        "reddit_authentication": "oauth" if settings.reddit_client_id and settings.reddit_client_secret else "anonymous",
+    }
 
 
 @app.get("/api/dashboard")
@@ -244,6 +252,7 @@ def dashboard(db: Session = Depends(get_db)):
         "rights_pending": rights_pending,
         "rights_blocked": rights_blocked,
         "source_mode": settings.reddit_source_mode,
+        "reddit_authentication": "oauth" if settings.reddit_client_id and settings.reddit_client_secret else "anonymous",
         "auto_approve": False,
         "automation_enabled": settings.daily_automation_enabled,
         "last_run": None if not last_run else {"id": last_run.id, "status": last_run.status, "created_at": last_run.created_at.isoformat()},
@@ -407,6 +416,8 @@ def create_collage(case_id: str, payload: CollageInput, db: Session = Depends(ge
     saved_panel_options = edit.get("panel_options") if isinstance(edit.get("panel_options"), dict) else None
     saved_collage_adjustments = edit.get("collage_adjustments") if isinstance(edit.get("collage_adjustments"), dict) else None
     saved_watermark = edit.get("watermark") if isinstance(edit.get("watermark"), dict) else None
+    saved_canvas_format = edit.get("canvas_format") if edit.get("canvas_format") in {"instagram_portrait", "instagram_landscape"} else "instagram_portrait"
+    saved_layout_template = edit.get("layout_template") if edit.get("layout_template") in {"balanced_grid", "hero_focus", "editorial_split"} else "balanced_grid"
     render_assets = build_render_assets(case, approved_candidates, panel_ids=saved_panel_ids)
     if len(render_assets) < 2:
         raise HTTPException(422, "The outfit needs another approved historical, current-angle, or official designer image")
@@ -422,6 +433,8 @@ def create_collage(case_id: str, payload: CollageInput, db: Session = Depends(ge
             panel_options=saved_panel_options,
             collage_adjustments=saved_collage_adjustments,
             watermark_options=saved_watermark,
+            canvas_format=saved_canvas_format,
+            layout_template=saved_layout_template,
         )
     except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(422, str(exc)) from exc
@@ -430,7 +443,7 @@ def create_collage(case_id: str, payload: CollageInput, db: Session = Depends(ge
     db.flush()
     db.add(AuditEvent(entity_type="case", entity_id=case.id, action="collage_generated", actor=decision.editor_id, detail={"collage_id": record.id, "asset_count": len(render_assets), "candidate_ids": [item.id for item in approved_candidates], "custom_layout": bool(saved_panel_ids)}))
     db.commit()
-    return {"id": record.id, "preview_url": f"/outputs/case-{case.id}/collage.webp", "base_preview_url": f"/outputs/case-{case.id}/collage-base.webp", "source_preview_url": f"/outputs/case-{case.id}/collage-source.webp", "bundle_url": f"/api/cases/{case.id}/bundle", "asset_count": len(render_assets)}
+    return {"id": record.id, "preview_url": f"/outputs/case-{case.id}/collage.webp", "base_preview_url": f"/outputs/case-{case.id}/collage-base.webp", "source_preview_url": f"/outputs/case-{case.id}/collage-source.webp", "bundle_url": f"/api/cases/{case.id}/bundle", "asset_count": len(render_assets), "canvas_format": saved_canvas_format, "layout_template": saved_layout_template}
 
 
 @app.post("/api/cases/{case_id}/collage/assets", status_code=201, dependencies=[Depends(require_editor)])
@@ -584,7 +597,7 @@ async def upload_collage_watermark(
             "watermark": watermark,
             "updated_at": uploaded_at,
             "editor_id": editor_id,
-            "version": 4,
+            "version": 5,
         },
     }
     db.add(AuditEvent(
@@ -648,11 +661,13 @@ def edit_collage(case_id: str, payload: CollageEditInput, db: Session = Depends(
         "collage_edit": {
             "panel_ids": payload.panel_ids,
             "panel_options": panel_options,
+            "canvas_format": payload.canvas_format,
+            "layout_template": payload.layout_template,
             "collage_adjustments": payload.collage_adjustments.model_dump(),
             "watermark": watermark,
             "updated_at": edited_at,
             "editor_id": payload.editor_id,
-            "version": 4,
+            "version": 5,
         },
     }
     try:
@@ -685,6 +700,10 @@ def edit_collage(case_id: str, payload: CollageEditInput, db: Session = Depends(
                 "previous_panel_ids": previous.get("panel_ids", []),
                 "panel_ids": payload.panel_ids,
                 "panel_options": panel_options,
+                "previous_canvas_format": previous.get("canvas_format"),
+                "canvas_format": payload.canvas_format,
+                "previous_layout_template": previous.get("layout_template"),
+                "layout_template": payload.layout_template,
                 "previous_collage_adjustments": previous.get("collage_adjustments"),
                 "collage_adjustments": payload.collage_adjustments.model_dump(),
                 "previous_watermark": previous.get("watermark"),
@@ -703,6 +722,8 @@ def edit_collage(case_id: str, payload: CollageEditInput, db: Session = Depends(
         "asset_count": len(selected),
         "selected_ids": payload.panel_ids,
         "panel_options": panel_options,
+        "canvas_format": payload.canvas_format,
+        "layout_template": payload.layout_template,
         "collage_adjustments": payload.collage_adjustments.model_dump(),
         "watermark": watermark,
         "updated_at": edited_at,

@@ -69,7 +69,7 @@ STOPWORDS = {
     "her", "him", "his", "how", "in", "into", "its", "look", "looks", "more", "not", "of", "on", "one",
     "outfit", "she", "the", "their", "this", "to", "was", "wearing", "with", "wore", "submitted", "stylist",
 }
-COLLAGE_LAYOUT_VERSION = 4
+COLLAGE_LAYOUT_VERSION = 5
 MATCHER_VERSION = CURRENT_MATCHER_VERSION
 MATCH_TIME_SCOPE = "all_time"
 MIN_SOURCE_IMAGE_EDGE = 320
@@ -131,6 +131,10 @@ class AutomationError(RuntimeError):
 
 
 _AUTOMATION_LOCK = threading.Lock()
+_REDDIT_OAUTH_LOCK = threading.Lock()
+_REDDIT_OAUTH_TOKENS: dict[str, tuple[str, float]] = {}
+_REDDIT_OAUTH_TOKEN_URL = "https://www.reddit.com/api/v1/access_token"
+_REDDIT_OAUTH_API_URL = "https://oauth.reddit.com"
 
 
 def _serialized(function):
@@ -139,6 +143,118 @@ def _serialized(function):
         with _AUTOMATION_LOCK:
             return function(*args, **kwargs)
     return wrapper
+
+
+def _reddit_oauth_configured(client_id: str = "", client_secret: str = "") -> bool:
+    return bool(client_id.strip() and client_secret.strip())
+
+
+def _retry_delay(response: requests.Response, attempt: int) -> float:
+    """Return a bounded delay using Reddit's rate-limit response headers."""
+    for header in ("Retry-After", "X-Ratelimit-Reset"):
+        value = response.headers.get(header, "")
+        try:
+            return min(30.0, max(1.0, float(value)))
+        except (TypeError, ValueError):
+            continue
+    return min(30.0, 2.5 * (attempt + 1))
+
+
+def _clear_reddit_oauth_token_cache(client_id: str | None = None) -> None:
+    with _REDDIT_OAUTH_LOCK:
+        if client_id is None:
+            _REDDIT_OAUTH_TOKENS.clear()
+        else:
+            _REDDIT_OAUTH_TOKENS.pop(client_id.strip(), None)
+
+
+def _reddit_oauth_token(client_id: str, client_secret: str, user_agent: str) -> str:
+    """Exchange app credentials for a short-lived, read-only OAuth token."""
+    client_id = client_id.strip()
+    client_secret = client_secret.strip()
+    if not _reddit_oauth_configured(client_id, client_secret):
+        raise AutomationError("Reddit OAuth requires both a client ID and client secret")
+
+    with _REDDIT_OAUTH_LOCK:
+        cached = _REDDIT_OAUTH_TOKENS.get(client_id)
+        now = time.monotonic()
+        if cached and cached[1] > now:
+            return cached[0]
+
+        last_error: Exception | None = None
+        for attempt in range(3):
+            try:
+                response = requests.post(
+                    _REDDIT_OAUTH_TOKEN_URL,
+                    auth=(client_id, client_secret),
+                    data={"grant_type": "client_credentials"},
+                    headers={"User-Agent": user_agent, "Accept": "application/json"},
+                    timeout=20,
+                )
+                if response.status_code == 429 and attempt < 2:
+                    time.sleep(_retry_delay(response, attempt))
+                    continue
+                response.raise_for_status()
+                payload = response.json()
+                token = str(payload.get("access_token") or "").strip()
+                if not token:
+                    raise AutomationError("Reddit OAuth token response did not contain an access token")
+                try:
+                    expires_in = max(120.0, float(payload.get("expires_in") or 3600))
+                except (TypeError, ValueError):
+                    expires_in = 3600.0
+                _REDDIT_OAUTH_TOKENS[client_id] = (token, now + expires_in - 60.0)
+                return token
+            except (requests.RequestException, ValueError) as exc:
+                last_error = exc
+                status = getattr(getattr(exc, "response", None), "status_code", None)
+                if status and 400 <= status < 500 and status != 429:
+                    break
+                if attempt < 2:
+                    time.sleep(1.5 * (attempt + 1))
+        raise AutomationError(f"Reddit OAuth token request failed: {last_error}")
+
+
+def _reddit_oauth_request(
+    path: str,
+    user_agent: str,
+    client_id: str,
+    client_secret: str,
+    *,
+    parameters: dict | None = None,
+) -> requests.Response:
+    """Make an authenticated Reddit API request with token refresh and backoff."""
+    url = f"{_REDDIT_OAUTH_API_URL}/{path.lstrip('/')}"
+    last_error: Exception | None = None
+    for attempt in range(3):
+        token = _reddit_oauth_token(client_id, client_secret, user_agent)
+        try:
+            response = requests.get(
+                url,
+                params=parameters,
+                headers={
+                    "User-Agent": user_agent,
+                    "Accept": "application/json",
+                    "Authorization": f"Bearer {token}",
+                },
+                timeout=20,
+            )
+            if response.status_code == 401 and attempt < 2:
+                _clear_reddit_oauth_token_cache(client_id)
+                continue
+            if response.status_code == 429 and attempt < 2:
+                time.sleep(_retry_delay(response, attempt))
+                continue
+            response.raise_for_status()
+            return response
+        except requests.RequestException as exc:
+            last_error = exc
+            status = getattr(exc.response, "status_code", None)
+            if status and 400 <= status < 500 and status not in {401, 429}:
+                break
+            if attempt < 2:
+                time.sleep(1.5 * (attempt + 1))
+    raise AutomationError(f"Reddit OAuth API request failed: {last_error}")
 
 
 def _request(
@@ -468,6 +584,35 @@ def _parse_reddit_listing(payload: dict) -> tuple[list[dict], list[datetime], st
     return posts, published_values, str(after) if after else None
 
 
+def _fetch_reddit_post_oauth(
+    permalink: str,
+    user_agent: str,
+    client_id: str,
+    client_secret: str,
+) -> dict | None:
+    """Resolve one Reddit post and its complete gallery through OAuth JSON."""
+    match = re.search(r"/comments/([a-z0-9]+)(?:/|$)", permalink, re.I)
+    if match is None:
+        return None
+    response = _reddit_oauth_request(
+        f"/comments/{match.group(1)}",
+        user_agent,
+        client_id,
+        client_secret,
+        parameters={"raw_json": 1, "limit": 1},
+    )
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise AutomationError("Reddit OAuth post response was not valid JSON") from exc
+    listing = payload[0] if isinstance(payload, list) and payload else payload
+    posts, _, _ = _parse_reddit_listing(listing)
+    if not posts:
+        return None
+    posts[0]["gallery_expanded"] = True
+    return posts[0]
+
+
 def _source_timezone(name: str) -> ZoneInfo:
     try:
         return ZoneInfo(name)
@@ -482,6 +627,9 @@ def _fetch_reddit_daily_json(
     page_size: int,
     max_pages: int,
     user_agent: str,
+    *,
+    oauth_client_id: str = "",
+    oauth_client_secret: str = "",
 ) -> tuple[list[dict], int]:
     source_timezone = _source_timezone(timezone_name)
     after: str | None = None
@@ -495,11 +643,20 @@ def _fetch_reddit_daily_json(
         parameters = {"limit": safe_page_size, "raw_json": 1}
         if after:
             parameters["after"] = after
-        response = _request(
-            f"https://www.reddit.com/r/{subreddit}/new.json?{urlencode(parameters)}",
-            user_agent,
-            accept="application/json",
-        )
+        if _reddit_oauth_configured(oauth_client_id, oauth_client_secret):
+            response = _reddit_oauth_request(
+                f"/r/{subreddit}/new",
+                user_agent,
+                oauth_client_id,
+                oauth_client_secret,
+                parameters=parameters,
+            )
+        else:
+            response = _request(
+                f"https://www.reddit.com/r/{subreddit}/new.json?{urlencode(parameters)}",
+                user_agent,
+                accept="application/json",
+            )
         try:
             payload = response.json()
         except ValueError as exc:
@@ -590,6 +747,8 @@ def fetch_reddit_daily_posts(
     timezone_name: str = "Asia/Kolkata",
     page_size: int = 100,
     max_pages: int = 50,
+    oauth_client_id: str = "",
+    oauth_client_secret: str = "",
 ) -> tuple[list[dict], dict]:
     """Fetch every image post on a local calendar day, following listing pages.
 
@@ -599,32 +758,49 @@ def fetch_reddit_daily_posts(
     """
     source_timezone = _source_timezone(timezone_name)
     selected_date = target_date or datetime.now(source_timezone).date()
-    provider = "reddit_json"
+    oauth_enabled = _reddit_oauth_configured(oauth_client_id, oauth_client_secret)
+    provider = "reddit_oauth" if oauth_enabled else "reddit_json"
     json_error = None
-    try:
+    if oauth_enabled:
         posts, pages = _fetch_reddit_daily_json(
-            subreddit, selected_date, timezone_name, page_size, max_pages, user_agent
+            subreddit,
+            selected_date,
+            timezone_name,
+            page_size,
+            max_pages,
+            user_agent,
+            oauth_client_id=oauth_client_id,
+            oauth_client_secret=oauth_client_secret,
         )
-    except AutomationError as exc:
-        json_error = str(exc)
-        provider = "reddit_rss_fallback"
-        posts, pages = _fetch_reddit_daily_rss(
-            subreddit, selected_date, timezone_name, page_size, max_pages, user_agent
-        )
+    else:
+        try:
+            posts, pages = _fetch_reddit_daily_json(
+                subreddit, selected_date, timezone_name, page_size, max_pages, user_agent
+            )
+        except AutomationError as exc:
+            json_error = str(exc)
+            provider = "reddit_rss_fallback"
+            posts, pages = _fetch_reddit_daily_rss(
+                subreddit, selected_date, timezone_name, page_size, max_pages, user_agent
+            )
 
     for post in posts:
-        expanded = _expand_reddit_post_media(post["permalink"], user_agent)
-        if expanded:
-            post["image_urls"] = expanded
+        if oauth_enabled:
             post["gallery_expanded"] = True
         else:
-            post["gallery_expanded"] = len(post["image_urls"]) > 1
+            expanded = _expand_reddit_post_media(post["permalink"], user_agent)
+            if expanded:
+                post["image_urls"] = expanded
+                post["gallery_expanded"] = True
+            else:
+                post["gallery_expanded"] = len(post["image_urls"]) > 1
     return posts, {
         "target_date": selected_date.isoformat(),
         "timezone": timezone_name,
         "listing_provider": provider,
         "pages_scanned": pages,
         "complete_day_scan": True,
+        "reddit_authentication": "oauth" if oauth_enabled else "anonymous",
         "json_fallback_reason": json_error,
     }
 
@@ -647,11 +823,37 @@ def fetch_reddit_feed(subreddit: str, limit: int, user_agent: str) -> list[dict]
     return posts
 
 
-def search_reddit_feed(subreddit: str, query: str, limit: int, user_agent: str) -> list[dict]:
+def search_reddit_feed(
+    subreddit: str,
+    query: str,
+    limit: int,
+    user_agent: str,
+    *,
+    oauth_client_id: str = "",
+    oauth_client_secret: str = "",
+) -> list[dict]:
     """Search the full Reddit history; relevance is never restricted by age."""
     requested = max(1, min(limit, 100))
-    parameters = urlencode({"q": query, "restrict_sr": "on", "sort": "relevance", "t": "all", "limit": requested})
-    response = _request(f"https://www.reddit.com/r/{subreddit}/search.rss?{parameters}", user_agent)
+    parameters = {"q": query, "restrict_sr": "on", "sort": "relevance", "t": "all", "limit": requested, "raw_json": 1}
+    if _reddit_oauth_configured(oauth_client_id, oauth_client_secret):
+        response = _reddit_oauth_request(
+            f"/r/{subreddit}/search",
+            user_agent,
+            oauth_client_id,
+            oauth_client_secret,
+            parameters=parameters,
+        )
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise AutomationError("Reddit OAuth search response was not valid JSON") from exc
+        posts, _, _ = _parse_reddit_listing(payload)
+        return posts[:requested]
+
+    response = _request(
+        f"https://www.reddit.com/r/{subreddit}/search.rss?{urlencode(parameters)}",
+        user_agent,
+    )
     return _parse_feed(response.content, requested)
 
 
@@ -1292,7 +1494,27 @@ def _refresh_case_post_images(case: Case, settings, retrieved_at: str) -> bool:
     """
     extraction = case.extraction if isinstance(case.extraction, dict) else {}
     checked_at = datetime.now(timezone.utc).isoformat()
-    expanded = _expand_reddit_post_media(case.permalink, settings.reddit_user_agent)
+    oauth_client_id = str(getattr(settings, "reddit_client_id", "") or "")
+    oauth_client_secret = str(getattr(settings, "reddit_client_secret", "") or "")
+    oauth_enabled = _reddit_oauth_configured(oauth_client_id, oauth_client_secret)
+    source_post: dict | None = None
+    try:
+        if oauth_enabled:
+            source_post = _fetch_reddit_post_oauth(
+                case.permalink,
+                settings.reddit_user_agent,
+                oauth_client_id,
+                oauth_client_secret,
+            )
+            expanded = list(source_post.get("image_urls", [])) if source_post else []
+        else:
+            expanded = _expand_reddit_post_media(case.permalink, settings.reddit_user_agent)
+    except AutomationError as exc:
+        case.extraction = {
+            **extraction,
+            "gallery_retry": {"status": "unavailable", "checked_at": checked_at, "error": str(exc)[:240]},
+        }
+        return False
     if not expanded:
         case.extraction = {
             **extraction,
@@ -1330,7 +1552,7 @@ def _refresh_case_post_images(case: Case, settings, retrieved_at: str) -> bool:
 
     post = {
         "permalink": case.permalink,
-        "author": extraction.get("author") or "unknown",
+        "author": (source_post or {}).get("author") or extraction.get("author") or "unknown",
         "image_urls": valid_urls,
         "gallery_expanded": True,
     }
@@ -1461,14 +1683,25 @@ def _remote_reddit_matches(db: Session, case: Case, settings, *, limit: int = 3)
     # Do not put the current celebrity in the query: doing so suppresses the
     # very "same outfit, other celebrity" posts this workflow must discover.
     query, query_terms = _reddit_match_query(case)
+    oauth_client_id = str(getattr(settings, "reddit_client_id", "") or "")
+    oauth_client_secret = str(getattr(settings, "reddit_client_secret", "") or "")
+    oauth_enabled = _reddit_oauth_configured(oauth_client_id, oauth_client_secret)
     try:
-        # Reddit rate-limits anonymous RSS search. One bounded query per outfit
-        # with a pause is reliable and respectful enough for the daily job.
-        time.sleep(1.25)
+        # Anonymous RSS remains a best-effort fallback. OAuth requests are
+        # governed by Reddit's response headers and retry handling instead.
+        if not oauth_enabled:
+            time.sleep(1.25)
         search_limit = max(1, min(int(getattr(settings, "reddit_match_search_limit", 100)), 100))
-        posts = search_reddit_feed(settings.reddit_subreddit, query, search_limit, settings.reddit_user_agent)
+        posts = search_reddit_feed(
+            settings.reddit_subreddit,
+            query,
+            search_limit,
+            settings.reddit_user_agent,
+            oauth_client_id=oauth_client_id,
+            oauth_client_secret=oauth_client_secret,
+        )
     except AutomationError as exc:
-        return [], {"status": "unavailable", "query": query, "query_terms": query_terms, "time_scope": MATCH_TIME_SCOPE, "error": str(exc)[:240], "selected": 0}
+        return [], {"status": "unavailable", "provider": "reddit_oauth" if oauth_enabled else "reddit_rss", "query": query, "query_terms": query_terms, "time_scope": MATCH_TIME_SCOPE, "error": str(exc)[:240], "selected": 0}
 
     expected_designer_groups = _designer_term_groups(case.designer)
     candidate_rows = db.scalars(select(Candidate).where(Candidate.case_id == case.id)).all()
@@ -1568,7 +1801,7 @@ def _remote_reddit_matches(db: Session, case: Case, settings, *, limit: int = 3)
         if len(selected) >= limit:
             break
     db.flush()
-    return selected, {"status": "completed", "query": query, "query_terms": query_terms, "time_scope": MATCH_TIME_SCOPE, "results": len(posts), "selected": len(selected)}
+    return selected, {"status": "completed", "provider": "reddit_oauth" if oauth_enabled else "reddit_rss", "query": query, "query_terms": query_terms, "time_scope": MATCH_TIME_SCOPE, "results": len(posts), "selected": len(selected)}
 
 
 def _add_matches(db: Session, case: Case, media_dir: str) -> list[Candidate]:
@@ -1875,6 +2108,8 @@ def import_public_post_automation(db: Session, payload: dict, settings, static_d
             "source_image_count": len(downloaded),
             "asset_count": panel_count,
             "matches": research.get("matches", 0),
+            "canvas_format": _saved_canvas_format(case),
+            "layout_template": _saved_layout_template(case),
             "preview_url": f"/outputs/case-{case.id}/collage.webp",
             "bundle_url": f"/api/cases/{case.id}/bundle",
         }
@@ -1914,6 +2149,22 @@ def _saved_panel_options(case: Case) -> dict[str, dict] | None:
         if isinstance(panel_id, str) and isinstance(value, dict)
     }
     return options or None
+
+
+def _saved_canvas_format(case: Case) -> str:
+    extraction = case.extraction if isinstance(case.extraction, dict) else {}
+    edit = extraction.get("collage_edit")
+    if isinstance(edit, dict) and edit.get("canvas_format") in {"instagram_portrait", "instagram_landscape"}:
+        return str(edit["canvas_format"])
+    return "instagram_portrait"
+
+
+def _saved_layout_template(case: Case) -> str:
+    extraction = case.extraction if isinstance(case.extraction, dict) else {}
+    edit = extraction.get("collage_edit")
+    if isinstance(edit, dict) and edit.get("layout_template") in {"balanced_grid", "hero_focus", "editorial_split"}:
+        return str(edit["layout_template"])
+    return "balanced_grid"
 
 
 def _saved_watermark(case: Case) -> dict | None:
@@ -1982,6 +2233,8 @@ def render_draft_collage(
         panel_options=_saved_panel_options(case),
         collage_adjustments=_saved_collage_adjustments(case),
         watermark_options=_saved_watermark(case),
+        canvas_format=_saved_canvas_format(case),
+        layout_template=_saved_layout_template(case),
     )
     collage = Collage(case_id=case.id, decision_id=decision.id, image_path=image_path, manifest_path=manifest_path, bundle_path=bundle_path)
     db.add(collage)
@@ -2100,12 +2353,20 @@ def run_daily_automation(
             timezone_name=settings.reddit_daily_timezone,
             page_size=settings.reddit_listing_page_size,
             max_pages=settings.reddit_listing_max_pages,
+            oauth_client_id=str(getattr(settings, "reddit_client_id", "") or ""),
+            oauth_client_secret=str(getattr(settings, "reddit_client_secret", "") or ""),
         )
         summary.update(feed_metadata)
         summary["found"] = len(posts)
         retrieved_at = datetime.now(timezone.utc).isoformat()
         remote_searches_used = 0
-        remote_search_budget = max(0, settings.daily_remote_search_budget)
+        oauth_enabled = feed_metadata.get("reddit_authentication") == "oauth"
+        remote_search_budget = max(0, int(
+            getattr(settings, "reddit_oauth_daily_search_budget", settings.daily_remote_search_budget)
+            if oauth_enabled
+            else settings.daily_remote_search_budget
+        ))
+        summary["remote_search_budget"] = remote_search_budget
         designer_searches_used = 0
         designer_search_budget = max(0, settings.daily_designer_search_budget)
         for post in posts:
@@ -2322,18 +2583,20 @@ def run_daily_automation(
             previous_search = extraction.get("archive_search") if isinstance(extraction.get("archive_search"), dict) else None
             if previous_search and previous_search.get("matcher_version") == MATCHER_VERSION:
                 resolved_now = "designer" in metadata_changes
-                if previous_search.get("status") == "completed" or (
-                    previous_search.get("status") == "skipped" and not resolved_now
-                ):
-                    continue
-                checked_at = previous_search.get("checked_at")
-                if checked_at:
-                    try:
-                        checked = datetime.fromisoformat(checked_at)
-                        if datetime.now(timezone.utc) - checked < timedelta(hours=20):
-                            continue
-                    except (TypeError, ValueError):
-                        pass
+                provider_changed = oauth_enabled and previous_search.get("provider") != "reddit_oauth"
+                if not provider_changed:
+                    if previous_search.get("status") == "completed" or (
+                        previous_search.get("status") == "skipped" and not resolved_now
+                    ):
+                        continue
+                    checked_at = previous_search.get("checked_at")
+                    if checked_at:
+                        try:
+                            checked = datetime.fromisoformat(checked_at)
+                            if datetime.now(timezone.utc) - checked < timedelta(hours=20):
+                                continue
+                        except (TypeError, ValueError):
+                            pass
             if _canonical(case.designer) not in UNKNOWN_VALUES and remote_searches_used >= remote_search_budget:
                 continue
             result = _research_existing_case(db, case, settings, static_dir)

@@ -206,6 +206,43 @@ def test_multiple_post_photos_render_into_one_collage_file(tmp_path):
         assert collage.getpixel((collage.width - 1, collage.height - 1)) != (242, 238, 231)
 
 
+def test_instagram_formats_render_all_three_editor_layouts(tmp_path):
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    for index, color in enumerate(["#7c1738", "#1d6c62", "#c09042", "#315d76"], start=1):
+        Image.new("RGB", (520 + index * 25, 760 + index * 20), color).save(static_dir / f"look-{index}.png")
+
+    case = _case([
+        _asset("current_angle", suffix="2", image_path="/static/look-2.png"),
+        _asset("current_angle", suffix="3", image_path="/static/look-3.png"),
+        _asset("designer_reference", suffix="4", image_path="/static/look-4.png"),
+    ])
+    decision = SimpleNamespace(id="decision-instagram", decision="editor_draft", reason="Instagram layout choice")
+    formats = {
+        "instagram_portrait": (1080, 1350, "4:5"),
+        "instagram_landscape": (1080, 566, "1.91:1"),
+    }
+    for canvas_format, (width, height, ratio) in formats.items():
+        for layout_template in ("balanced_grid", "hero_focus", "editorial_split"):
+            image_path, manifest_path, _ = render_bundle(
+                str(tmp_path / "output"),
+                str(static_dir),
+                case,
+                [],
+                decision,
+                canvas_format=canvas_format,
+                layout_template=layout_template,
+            )
+            manifest = json.loads(open(manifest_path, encoding="utf-8").read())
+            assert manifest["canvas_format"] == canvas_format
+            assert manifest["canvas_width"] == width
+            assert manifest["canvas_height"] == height
+            assert manifest["canvas_ratio"] == ratio
+            assert manifest["layout"] == layout_template
+            with Image.open(image_path) as collage:
+                assert collage.size == (width, height)
+
+
 def test_panel_width_and_focal_crop_are_applied_and_recorded(tmp_path):
     static_dir = tmp_path / "static"
     static_dir.mkdir()

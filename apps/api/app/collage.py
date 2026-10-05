@@ -14,6 +14,11 @@ PALETTES = [
     ("#101818", "#1e847f", "#bbf0db"), ("#17131c", "#b6508a", "#f2b8da"),
     ("#111522", "#466bd7", "#c4d5ff"), ("#191612", "#a8864d", "#efe2bd"),
 ]
+INSTAGRAM_CANVAS_FORMATS = {
+    "instagram_portrait": {"width": 1080, "height": 1350, "label": "Instagram portrait", "ratio": "4:5"},
+    "instagram_landscape": {"width": 1080, "height": 566, "label": "Instagram landscape", "ratio": "1.91:1"},
+}
+COLLAGE_LAYOUT_TEMPLATES = {"balanced_grid", "hero_focus", "editorial_split"}
 
 def _font(size: int, bold: bool = False):
     path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
@@ -111,6 +116,150 @@ def _justified_geometry(
         geometry.append([(width, row_height) for width in widths])
         cursor += row_size
     return geometry
+
+
+def _weighted_sizes(total: int, weights: list[float]) -> list[int]:
+    """Divide one axis exactly, using editor panel-size weights."""
+    if not weights:
+        return []
+    safe = [max(0.2, float(weight)) for weight in weights]
+    scale = total / sum(safe)
+    sizes = [max(1, round(weight * scale)) for weight in safe]
+    sizes[-1] += total - sum(sizes)
+    return sizes
+
+
+def _grid_geometry_in_box(
+    count: int,
+    box: tuple[int, int, int, int],
+    weights: list[float],
+    columns: int,
+) -> list[tuple[int, int, int, int]]:
+    if count <= 0:
+        return []
+    x0, y0, box_width, box_height = box
+    columns = max(1, min(columns, count))
+    row_counts: list[int] = []
+    remaining = count
+    while remaining:
+        row_count = min(columns, remaining)
+        row_counts.append(row_count)
+        remaining -= row_count
+    row_heights = _weighted_sizes(box_height, [1.0] * len(row_counts))
+    geometry: list[tuple[int, int, int, int]] = []
+    cursor = 0
+    y = y0
+    for row_count, row_height in zip(row_counts, row_heights):
+        row_weights = weights[cursor:cursor + row_count]
+        widths = _weighted_sizes(box_width, row_weights)
+        x = x0
+        for width in widths:
+            geometry.append((x, y, width, row_height))
+            x += width
+        cursor += row_count
+        y += row_height
+    return geometry
+
+
+def _balanced_grid_geometry(
+    count: int,
+    width: int,
+    height: int,
+    weights: list[float],
+    canvas_format: str,
+) -> list[tuple[int, int, int, int]]:
+    if count <= 1:
+        return [(0, 0, width, height)]
+    if canvas_format == "instagram_portrait":
+        columns = 2 if count <= 6 else 3 if count <= 12 else 4
+    else:
+        columns = min(count, 3 if count <= 6 else 4 if count <= 12 else 6)
+    return _grid_geometry_in_box(count, (0, 0, width, height), weights, columns)
+
+
+def _hero_focus_geometry(
+    count: int,
+    width: int,
+    height: int,
+    weights: list[float],
+    canvas_format: str,
+) -> list[tuple[int, int, int, int]]:
+    if count <= 1:
+        return [(0, 0, width, height)]
+    hero_fraction = max(0.45, min(0.72, 0.58 * weights[0]))
+    if canvas_format == "instagram_portrait":
+        hero_height = round(height * hero_fraction)
+        supporting = _grid_geometry_in_box(
+            count - 1,
+            (0, hero_height, width, height - hero_height),
+            weights[1:],
+            min(3, count - 1),
+        )
+        return [(0, 0, width, hero_height), *supporting]
+    hero_width = round(width * hero_fraction)
+    supporting_columns = 1 if count <= 4 else 2
+    supporting = _grid_geometry_in_box(
+        count - 1,
+        (hero_width, 0, width - hero_width, height),
+        weights[1:],
+        supporting_columns,
+    )
+    return [(0, 0, hero_width, height), *supporting]
+
+
+def _editorial_split_geometry(
+    count: int,
+    width: int,
+    height: int,
+    weights: list[float],
+    canvas_format: str,
+) -> list[tuple[int, int, int, int]]:
+    """Build an asymmetric magazine-style split with no gutters."""
+    result: list[tuple[int, int, int, int] | None] = [None] * count
+
+    def place(indices: list[int], box: tuple[int, int, int, int], vertical: bool, depth: int) -> None:
+        if len(indices) == 1:
+            result[indices[0]] = box
+            return
+        split_at = (len(indices) + 1) // 2
+        first, second = indices[:split_at], indices[split_at:]
+        first_weight = sum(weights[index] for index in first)
+        total_weight = first_weight + sum(weights[index] for index in second)
+        fraction = first_weight / max(0.01, total_weight)
+        fraction += 0.07 if depth % 2 == 0 else -0.04
+        fraction = max(0.34, min(0.66, fraction))
+        x, y, box_width, box_height = box
+        if vertical:
+            first_width = max(1, min(box_width - 1, round(box_width * fraction)))
+            place(first, (x, y, first_width, box_height), False, depth + 1)
+            place(second, (x + first_width, y, box_width - first_width, box_height), False, depth + 1)
+        else:
+            first_height = max(1, min(box_height - 1, round(box_height * fraction)))
+            place(first, (x, y, box_width, first_height), True, depth + 1)
+            place(second, (x, y + first_height, box_width, box_height - first_height), True, depth + 1)
+
+    place(
+        list(range(count)),
+        (0, 0, width, height),
+        canvas_format == "instagram_portrait",
+        0,
+    )
+    return [item for item in result if item is not None]
+
+
+def _instagram_geometry(
+    count: int,
+    width: int,
+    height: int,
+    weights: list[float],
+    canvas_format: str,
+    layout_template: str,
+) -> list[tuple[int, int, int, int]]:
+    if layout_template == "hero_focus":
+        return _hero_focus_geometry(count, width, height, weights, canvas_format)
+    if layout_template == "editorial_split":
+        return _editorial_split_geometry(count, width, height, weights, canvas_format)
+    return _balanced_grid_geometry(count, width, height, weights, canvas_format)
 
 
 def _bounded_float(value, default: float, lower: float, upper: float) -> float:
@@ -348,6 +497,19 @@ def _fit_panel(image: Image.Image, size: tuple[int, int], option: dict) -> Image
     return background
 
 
+def _instagram_panel(image: Image.Image, size: tuple[int, int], option: dict) -> Image.Image:
+    """Render one fixed-canvas cell without reintroducing manually removed content."""
+    if option["crop_mode"] == "crop" and option["crop_rect"]:
+        selection = _crop_rectangle(image, option["crop_rect"])
+        try:
+            return _fit_panel(selection, size, {**option, "focal_x": 0.5, "focal_y": 0.5})
+        finally:
+            selection.close()
+    if option["crop_mode"] == "crop":
+        return _crop_panel(image, size, option)
+    return _fit_panel(image, size, option)
+
+
 def render_bundle(
     output_root: str,
     static_dir: str,
@@ -361,6 +523,8 @@ def render_bundle(
     panel_options: dict[str, dict] | None = None,
     collage_adjustments: dict | None = None,
     watermark_options: dict | None = None,
+    canvas_format: str | None = None,
+    layout_template: str | None = None,
 ):
     bundle_dir = Path(output_root) / f"case-{case.id}"
     bundle_dir.mkdir(parents=True, exist_ok=True)
@@ -375,7 +539,8 @@ def render_bundle(
         raise ValueError("At least one source-backed image is required")
     normalized_options = _normalized_panel_options(assets, panel_options)
 
-    canvas_width = 1200 if len(assets) == 1 else 1800 if len(assets) <= 12 else 2200
+    normalized_format = canvas_format if canvas_format in INSTAGRAM_CANVAS_FORMATS else None
+    normalized_template = layout_template if layout_template in COLLAGE_LAYOUT_TEMPLATES else "balanced_grid"
     opened: list[Image.Image] = []
     try:
         for asset in assets:
@@ -383,42 +548,62 @@ def render_bundle(
             opened.append(ImageOps.exif_transpose(source).convert("RGB"))
             source.close()
         width_scales = [normalized_options[str(asset["id"])]["width_scale"] for asset in assets]
-        aspect_ratios = []
-        for image, asset in zip(opened, assets):
-            option = normalized_options[str(asset["id"])]
-            rect = option["crop_rect"] if option["crop_mode"] == "crop" else None
-            if rect:
-                aspect_ratios.append((image.width * rect["width"]) / max(1, image.height * rect["height"]))
-            else:
-                aspect_ratios.append(image.width / max(1, image.height))
-        geometry = _justified_geometry(opened, canvas_width, width_scales, aspect_ratios)
-        canvas_height = sum(row[0][1] for row in geometry)
-        canvas = Image.new("RGB", (canvas_width, canvas_height))
-        image_index = 0
-        y = 0
-        for row in geometry:
-            x = 0
-            for width, height in row:
-                source = opened[image_index]
+        if normalized_format:
+            format_spec = INSTAGRAM_CANVAS_FORMATS[normalized_format]
+            canvas_width = int(format_spec["width"])
+            canvas_height = int(format_spec["height"])
+            cells = _instagram_geometry(
+                len(assets),
+                canvas_width,
+                canvas_height,
+                width_scales,
+                normalized_format,
+                normalized_template,
+            )
+            canvas = Image.new("RGB", (canvas_width, canvas_height))
+            for image_index, (x, y, width, height) in enumerate(cells):
                 option = normalized_options[str(assets[image_index]["id"])]
-                if option["crop_mode"] == "crop" and option["crop_rect"]:
-                    selection = _crop_rectangle(source, option["crop_rect"])
-                    if option["width_scale"] != 1.0:
-                        panel = _fit_panel(selection, (width, height), {**option, "focal_x": 0.5, "focal_y": 0.5})
-                    else:
-                        panel = selection.resize((width, height), Image.Resampling.LANCZOS)
-                    selection.close()
-                elif option["crop_mode"] == "crop":
-                    panel = _crop_panel(source, (width, height), option)
-                elif option["width_scale"] != 1.0:
-                    panel = _fit_panel(source, (width, height), option)
-                else:
-                    panel = source.resize((width, height), Image.Resampling.LANCZOS)
+                panel = _instagram_panel(opened[image_index], (width, height), option)
                 canvas.paste(panel, (x, y))
                 panel.close()
-                x += width
-                image_index += 1
-            y += row[0][1]
+        else:
+            canvas_width = 1200 if len(assets) == 1 else 1800 if len(assets) <= 12 else 2200
+            aspect_ratios = []
+            for image, asset in zip(opened, assets):
+                option = normalized_options[str(asset["id"])]
+                rect = option["crop_rect"] if option["crop_mode"] == "crop" else None
+                if rect:
+                    aspect_ratios.append((image.width * rect["width"]) / max(1, image.height * rect["height"]))
+                else:
+                    aspect_ratios.append(image.width / max(1, image.height))
+            geometry = _justified_geometry(opened, canvas_width, width_scales, aspect_ratios)
+            canvas_height = sum(row[0][1] for row in geometry)
+            canvas = Image.new("RGB", (canvas_width, canvas_height))
+            image_index = 0
+            y = 0
+            for row in geometry:
+                x = 0
+                for width, height in row:
+                    source = opened[image_index]
+                    option = normalized_options[str(assets[image_index]["id"])]
+                    if option["crop_mode"] == "crop" and option["crop_rect"]:
+                        selection = _crop_rectangle(source, option["crop_rect"])
+                        if option["width_scale"] != 1.0:
+                            panel = _fit_panel(selection, (width, height), {**option, "focal_x": 0.5, "focal_y": 0.5})
+                        else:
+                            panel = selection.resize((width, height), Image.Resampling.LANCZOS)
+                        selection.close()
+                    elif option["crop_mode"] == "crop":
+                        panel = _crop_panel(source, (width, height), option)
+                    elif option["width_scale"] != 1.0:
+                        panel = _fit_panel(source, (width, height), option)
+                    else:
+                        panel = source.resize((width, height), Image.Resampling.LANCZOS)
+                    canvas.paste(panel, (x, y))
+                    panel.close()
+                    x += width
+                    image_index += 1
+                y += row[0][1]
     finally:
         for image in opened:
             image.close()
@@ -444,7 +629,11 @@ def render_bundle(
         "outfit": {"celebrity": case.celebrity, "designer": case.designer, "event": case.event_name, "date": case.event_date},
         "assets": assets,
         "panel_count": len(assets),
-        "layout": "edge_to_edge_justified",
+        "layout": normalized_template if normalized_format else "edge_to_edge_justified",
+        "canvas_format": normalized_format or "source_ratio",
+        "canvas_width": canvas.width,
+        "canvas_height": canvas.height,
+        "canvas_ratio": INSTAGRAM_CANVAS_FORMATS[normalized_format]["ratio"] if normalized_format else "source-driven",
         "editor_customized": panel_ids is not None,
         "panel_options": normalized_options,
         "collage_adjustments": normalized_collage_adjustments,
@@ -458,7 +647,17 @@ def render_bundle(
     manifest_path = bundle_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
-    source_lines = ["# Source manifest", "", f"Outfit: {case.celebrity} in {case.designer}", ""]
+    source_lines = [
+        "# Source manifest",
+        "",
+        f"Outfit: {case.celebrity} in {case.designer}",
+        "",
+        "## Collage layout",
+        f"- Format: {INSTAGRAM_CANVAS_FORMATS[normalized_format]['label'] if normalized_format else 'Source-driven'}",
+        f"- Template: {normalized_template.replace('_', ' ').title() if normalized_format else 'Edge-to-edge justified'}",
+        f"- Dimensions: {canvas.width} × {canvas.height} px",
+        "",
+    ]
     for index, asset in enumerate(assets, start=1):
         source_lines.extend(
             [

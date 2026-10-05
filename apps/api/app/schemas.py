@@ -84,6 +84,8 @@ class WatermarkLayout(BaseModel):
 class CollageEditInput(BaseModel):
     panel_ids: list[str] = Field(min_length=1, max_length=24)
     panel_options: dict[str, PanelLayoutOption] = Field(default_factory=dict)
+    canvas_format: Literal["instagram_portrait", "instagram_landscape"] = "instagram_portrait"
+    layout_template: Literal["balanced_grid", "hero_focus", "editorial_split"] = "balanced_grid"
     collage_adjustments: ImageAdjustments = Field(default_factory=ImageAdjustments)
     watermark: WatermarkLayout | None = None
     editor_id: str = Field(default="editor@atelier", min_length=2, max_length=120)

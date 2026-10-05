@@ -13,6 +13,35 @@ docker compose up --build
 
 Open http://localhost:3100. API docs are at http://localhost:8100/docs.
 
+### Reddit OAuth (recommended)
+
+For dependable daily intake and archive search, register a Reddit Data API
+application under the Reddit account that owns this integration. Do not put the
+account password in this project. Add only the issued OAuth application
+credentials to `.env`:
+
+```env
+REDDIT_CLIENT_ID=your-issued-client-id
+REDDIT_CLIENT_SECRET=your-issued-client-secret
+REDDIT_USER_AGENT=windows:hhc-outfit-research:v1.0 (by /u/your_reddit_username)
+```
+
+Restart the API after changing `.env`:
+
+```powershell
+docker compose up -d --build api
+```
+
+`GET http://localhost:8100/health` reports `reddit_authentication: oauth`
+when both credentials are loaded. OAuth mode uses Reddit's JSON API for daily
+listings, complete gallery metadata, and all-time archive searches. Tokens are
+kept in memory, refreshed automatically, and never returned to the browser.
+It processes up to `REDDIT_OAUTH_DAILY_SEARCH_BUDGET` archive searches per run
+(80 by default), while anonymous mode keeps the conservative
+`DAILY_REMOTE_SEARCH_BUDGET` limit.
+When credentials are absent, the application retains its anonymous RSS/JSON
+fallback for local demonstration, but that fallback can still be throttled.
+
 For local testing, Docker enables a temporary demo login by default:
 `hhc-demo` / `HHC-Demo-2026!`. Set `DEMO_LOGIN_ENABLED=false` before sharing or
 deploying the application, then use the client WordPress Application Password.

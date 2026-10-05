@@ -96,6 +96,8 @@ type PanelLayoutOption = {
   zoom: number;
   crop_rect?: CropRectangle | null;
 };
+type CanvasFormat = "instagram_portrait" | "instagram_landscape";
+type LayoutTemplate = "balanced_grid" | "hero_focus" | "editorial_split";
 type ImageAdjustments = {
   brightness: number;
   contrast: number;
@@ -126,6 +128,8 @@ type CollageEditor = {
   panels: CollagePanel[];
   default_ids: string[];
   selected_ids: string[];
+  canvas_format: CanvasFormat;
+  layout_template: LayoutTemplate;
   panel_options: Record<string, PanelLayoutOption>;
   collage_adjustments: ImageAdjustments;
   watermark_asset?: WatermarkAsset | null;
@@ -143,7 +147,7 @@ type CaseDetail = CaseSummary & {
   collage_editor: CollageEditor;
   latest_collage?: { id: string; preview_url: string; base_preview_url?: string; source_preview_url?: string; bundle_url: string; created_at: string } | null;
 };
-type CollageResult = { previewUrl: string; bundleUrl: string; assetCount: number };
+type CollageResult = { previewUrl: string; bundleUrl: string; assetCount: number; canvasFormat?: CanvasFormat; layoutTemplate?: LayoutTemplate };
 
 const PENDING_STATUSES = new Set(["review_ready", "context_review", "needs_research", "research_queued"]);
 const REVIEWED_STATUSES = new Set(["approved", "rejected", "auto_rejected", "similar_not_same"]);
@@ -151,6 +155,15 @@ const DEFAULT_CROP_RECT: CropRectangle = { x: 0, y: 0, width: 1, height: 1 };
 const DEFAULT_PANEL_OPTION: PanelLayoutOption = { width_scale: 1, crop_mode: "fit", focal_x: .5, focal_y: .5, zoom: 1, crop_rect: DEFAULT_CROP_RECT };
 const DEFAULT_IMAGE_ADJUSTMENTS: ImageAdjustments = { brightness: 1, contrast: 1, saturation: 1, grayscale: 0 };
 const DEFAULT_WATERMARK_LAYOUT = { enabled: true, center_x: .82, center_y: .9, width: .2, height: null, rotation_degrees: 0, opacity: .72, adjustments: DEFAULT_IMAGE_ADJUSTMENTS };
+const CANVAS_FORMATS: { id: CanvasFormat; label: string; detail: string }[] = [
+  { id: "instagram_portrait", label: "Portrait", detail: "1080 × 1350 · 4:5" },
+  { id: "instagram_landscape", label: "Landscape", detail: "1080 × 566 · 1.91:1" },
+];
+const LAYOUT_TEMPLATES: { id: LayoutTemplate; label: string; detail: string }[] = [
+  { id: "balanced_grid", label: "Balanced grid", detail: "Equal editorial rhythm" },
+  { id: "hero_focus", label: "Hero focus", detail: "Lead image with supporting views" },
+  { id: "editorial_split", label: "Editorial split", detail: "Asymmetric magazine treatment" },
+];
 
 const VIEW_META: Record<WorkspaceView, { label: string; short: string; title: string; accent: string; description: string; listTitle: string; listKicker: string }> = {
   today: {
@@ -508,6 +521,33 @@ function CollageAdjustmentEditor({ baseImage, adjustments, onChange }: {
   </details>;
 }
 
+function CollageLayoutPicker({ panels, canvasFormat, layoutTemplate, onFormatChange, onTemplateChange }: {
+  panels: CollagePanel[];
+  canvasFormat: CanvasFormat;
+  layoutTemplate: LayoutTemplate;
+  onFormatChange: (format: CanvasFormat) => void;
+  onTemplateChange: (template: LayoutTemplate) => void;
+}) {
+  const previewPanels = panels.slice(0, 4);
+  return <section className="collage-layout-picker">
+    <div className="layout-picker-heading"><div><small>Instagram edition</small><h3>Format &amp; collage style</h3><p>Choose the final Instagram canvas, then select one of three editorial arrangements.</p></div><span>{canvasFormat === "instagram_portrait" ? "4:5" : "1.91:1"}</span></div>
+    <div className="canvas-format-options" role="radiogroup" aria-label="Instagram canvas format">
+      {CANVAS_FORMATS.map(format => <button key={format.id} type="button" role="radio" aria-checked={canvasFormat === format.id} className={canvasFormat === format.id ? "active" : ""} onClick={() => onFormatChange(format.id)}>
+        <i className={format.id === "instagram_portrait" ? "portrait" : "landscape"}/><span><strong>{format.label}</strong><small>{format.detail}</small></span><Icon name={canvasFormat === format.id ? "check" : "image"} size={14}/>
+      </button>)}
+    </div>
+    <div className="layout-template-options" role="radiogroup" aria-label="Collage layout template">
+      {LAYOUT_TEMPLATES.map(template => <button key={template.id} type="button" role="radio" aria-checked={layoutTemplate === template.id} className={layoutTemplate === template.id ? "active" : ""} onClick={() => onTemplateChange(template.id)}>
+        <span className={`layout-template-preview ${canvasFormat === "instagram_portrait" ? "is-portrait" : "is-landscape"} template-${template.id}`} aria-hidden>
+          {previewPanels.map(panel => <i key={panel.id}><img src={asset(panel.image_path)} alt=""/></i>)}
+        </span>
+        <span><strong>{template.label}</strong><small>{template.detail}</small></span>
+        <em>{layoutTemplate === template.id ? "Selected" : "Choose"}</em>
+      </button>)}
+    </div>
+  </section>;
+}
+
 function WatermarkEditor({ baseImage, collageAdjustments, watermark, onChange, onUpload, uploadBusy }: {
   baseImage: string;
   collageAdjustments: ImageAdjustments;
@@ -770,6 +810,8 @@ export default function DashboardPage() {
   const [showCollageEditor, setShowCollageEditor] = useState(false);
   const [editorPanelIds, setEditorPanelIds] = useState<string[]>([]);
   const [editorPanelOptions, setEditorPanelOptions] = useState<Record<string, PanelLayoutOption>>({});
+  const [editorCanvasFormat, setEditorCanvasFormat] = useState<CanvasFormat>("instagram_portrait");
+  const [editorLayoutTemplate, setEditorLayoutTemplate] = useState<LayoutTemplate>("balanced_grid");
   const [editorCollageAdjustments, setEditorCollageAdjustments] = useState<ImageAdjustments>({ ...DEFAULT_IMAGE_ADJUSTMENTS });
   const [editorWatermark, setEditorWatermark] = useState<WatermarkLayout | null>(null);
   const [tuningPanelId, setTuningPanelId] = useState<string | null>(null);
@@ -949,7 +991,7 @@ export default function DashboardPage() {
       const data = await response.json();
       if (!response.ok) return setToast(data.detail || "Collage could not be generated.");
       const cacheKey = Date.now();
-      setCollageResult({ previewUrl: `${asset(data.preview_url)}?v=${cacheKey}`, bundleUrl: data.bundle_url.replace(/^\/api\//, "/api/backend/"), assetCount: data.asset_count });
+      setCollageResult({ previewUrl: `${asset(data.preview_url)}?v=${cacheKey}`, bundleUrl: data.bundle_url.replace(/^\/api\//, "/api/backend/"), assetCount: data.asset_count, canvasFormat: data.canvas_format, layoutTemplate: data.layout_template });
       setToast(`${data.asset_count}-image collage and evidence bundle created.`);
     } finally { setCollageBusy(false); }
   }
@@ -960,6 +1002,8 @@ export default function DashboardPage() {
       ? selected.collage_editor.selected_ids
       : selected.collage_editor.default_ids);
     setEditorPanelOptions(selected.collage_editor.panel_options || {});
+    setEditorCanvasFormat(selected.collage_editor.canvas_format || "instagram_portrait");
+    setEditorLayoutTemplate(selected.collage_editor.layout_template || "balanced_grid");
     setEditorCollageAdjustments({ ...DEFAULT_IMAGE_ADJUSTMENTS, ...(selected.collage_editor.collage_adjustments || {}) });
     const savedWatermark = selected.collage_editor.watermark;
     setEditorWatermark(savedWatermark ? {
@@ -991,6 +1035,8 @@ export default function DashboardPage() {
     if (!selected?.collage_editor) return;
     setEditorPanelIds(selected.collage_editor.default_ids);
     setEditorPanelOptions({});
+    setEditorCanvasFormat("instagram_portrait");
+    setEditorLayoutTemplate("balanced_grid");
     setTuningPanelId(null);
   }
 
@@ -1017,6 +1063,8 @@ export default function DashboardPage() {
         body: JSON.stringify({
           panel_ids: editorPanelIds,
           panel_options: selectedOptions,
+          canvas_format: editorCanvasFormat,
+          layout_template: editorLayoutTemplate,
           collage_adjustments: editorCollageAdjustments,
           watermark: editorWatermark ? {
             enabled: editorWatermark.enabled,
@@ -1040,8 +1088,10 @@ export default function DashboardPage() {
         previewUrl: `${asset(data.preview_url)}?v=${cacheKey}`,
         bundleUrl: data.bundle_url.replace(/^\/api\//, "/api/backend/"),
         assetCount: data.asset_count,
+        canvasFormat: data.canvas_format,
+        layoutTemplate: data.layout_template,
       });
-      setToast(`Collage updated with ${data.asset_count} source-backed panel${data.asset_count === 1 ? "" : "s"}${data.watermark?.enabled ? " and the HHC watermark" : ""}.`);
+      setToast(`${editorCanvasFormat === "instagram_portrait" ? "Portrait" : "Landscape"} ${LAYOUT_TEMPLATES.find(item => item.id === editorLayoutTemplate)?.label.toLowerCase()} collage updated with ${data.asset_count} source-backed panel${data.asset_count === 1 ? "" : "s"}${data.watermark?.enabled ? " and the HHC watermark" : ""}.`);
       await openCase(caseId);
     } finally { setEditorBusy(false); }
   }
@@ -1149,6 +1199,8 @@ export default function DashboardPage() {
         previewUrl: `${asset(data.preview_url)}?v=${Date.now()}`,
         bundleUrl: data.bundle_url.replace(/^\/api\//, "/api/backend/"),
         assetCount: data.asset_count,
+        canvasFormat: data.canvas_format || "instagram_portrait",
+        layoutTemplate: data.layout_template || "balanced_grid",
       });
       setToast(`${data.platform} post imported with ${data.source_image_count} public image${data.source_image_count === 1 ? "" : "s"}; the research collage is ready.`);
     } catch {
@@ -1227,7 +1279,7 @@ export default function DashboardPage() {
 
             {selected.latest_collage && <section className="automatic-draft-card">
               <div className="automatic-draft-image"><img src={asset(selected.latest_collage.preview_url)} alt={`Automatic collage for ${selected.celebrity}`}/><span>Generated automatically</span></div>
-              <div className="automatic-draft-copy"><small>Today’s ready-to-review output</small><h3>Single-image collage complete</h3><p>Every usable image from the source post is arranged edge-to-edge in one collage, followed by the historical or exact original-outfit comparison when available.</p><div><span><Icon name="check" size={13}/>{automaticPanelCount} source panel{automaticPanelCount === 1 ? "" : "s"} in one image</span><span><Icon name="shield" size={13}/>Draft only — never auto-published</span></div><footer><button type="button" className="primary" onClick={() => setCollageResult({ previewUrl: asset(selected.latest_collage!.preview_url), bundleUrl: selected.latest_collage!.bundle_url.replace(/^\/api\//, "/api/backend/"), assetCount: automaticPanelCount })}><Icon name="eye"/>View collage</button><button type="button" className="ghost" onClick={openCollageEditor}><Icon name="edit"/>Edit collage &amp; sources</button><a className="ghost" href={selected.latest_collage.bundle_url.replace(/^\/api\//, "/api/backend/")} target="_blank" rel="noreferrer"><Icon name="download"/>Evidence bundle</a></footer></div>
+              <div className="automatic-draft-copy"><small>Today’s ready-to-review output</small><h3>Instagram collage complete</h3><p>Every usable source image is assembled into the selected Instagram format. Open the editor to switch between portrait and landscape or choose one of three collage arrangements.</p><div><span><Icon name="check" size={13}/>{automaticPanelCount} source panel{automaticPanelCount === 1 ? "" : "s"} in one image</span><span><Icon name="shield" size={13}/>Draft only — never auto-published</span></div><footer><button type="button" className="primary" onClick={() => setCollageResult({ previewUrl: asset(selected.latest_collage!.preview_url), bundleUrl: selected.latest_collage!.bundle_url.replace(/^\/api\//, "/api/backend/"), assetCount: automaticPanelCount, canvasFormat: selected.collage_editor.canvas_format, layoutTemplate: selected.collage_editor.layout_template })}><Icon name="eye"/>View collage</button><button type="button" className="ghost" onClick={openCollageEditor}><Icon name="edit"/>Edit collage &amp; sources</button><a className="ghost" href={selected.latest_collage.bundle_url.replace(/^\/api\//, "/api/backend/")} target="_blank" rel="noreferrer"><Icon name="download"/>Evidence bundle</a></footer></div>
             </section>}
 
             {!candidate && <>
@@ -1271,9 +1323,10 @@ export default function DashboardPage() {
 
     {showCollageEditor && selected && <div className="modal-backdrop collage-editor-backdrop" onMouseDown={() => !editorBusy && setShowCollageEditor(false)}><section className="collage-editor-modal" role="dialog" aria-modal="true" aria-labelledby="collage-editor-title" onMouseDown={event => event.stopPropagation()}>
       <header><div><small>Collage workspace</small><h2 id="collage-editor-title">Edit this collage.</h2><p>Reorder, replace, resize, or crop each image, then review its fashion-archive history and source rights in the same panel.</p></div><button type="button" className="modal-close" onClick={() => setShowCollageEditor(false)} disabled={editorBusy} aria-label="Close collage editor"><Icon name="close"/></button></header>
-      <div className="collage-editor-summary"><span><b>{editorSelectedPanels.length}</b> selected panels</span><span><Icon name="shield" size={13}/>Source and rights metadata stay attached</span><span>{editorWatermark?.enabled ? "HHC watermark ready" : "Watermark optional"}</span></div>
+      <div className="collage-editor-summary"><span><b>{editorSelectedPanels.length}</b> selected panels</span><span><Icon name="image" size={13}/>{editorCanvasFormat === "instagram_portrait" ? "Instagram portrait · 4:5" : "Instagram landscape · 1.91:1"}</span><span>{LAYOUT_TEMPLATES.find(item => item.id === editorLayoutTemplate)?.label}</span><span>{editorWatermark?.enabled ? "HHC watermark ready" : "Watermark optional"}</span></div>
       <div className="collage-editor-body">
         <section className="selected-panel-list"><div className="editor-section-heading"><div><small>Final image order</small><h3>Panels in collage</h3></div><button type="button" onClick={resetCollageLayout}>Reset automatic layout</button></div>
+          <CollageLayoutPicker panels={editorSelectedPanels} canvasFormat={editorCanvasFormat} layoutTemplate={editorLayoutTemplate} onFormatChange={setEditorCanvasFormat} onTemplateChange={setEditorLayoutTemplate}/>
           <div className="panel-sort-list">{editorSelectedPanels.map((panel, index) => {
             const requiredCurrent = ["current_primary", "current_angle"].includes(panel.role) && selectedCurrentPanelCount === 1;
             const option = panelOption(panel.id);
@@ -1329,7 +1382,7 @@ export default function DashboardPage() {
       <footer><div><Icon name="shield"/><span>This saves a new draft and audit entry. It does not publish to WordPress.</span></div><div><button type="button" className="ghost" onClick={() => setShowCollageEditor(false)} disabled={editorBusy}>Cancel</button><button type="button" className="download" onClick={() => void saveCollageEdit()} disabled={editorBusy || !editorPanelIds.length}><Icon name={editorBusy ? "refresh" : "image"}/>{editorBusy ? "Rendering…" : "Save & re-render"}</button></div></footer>
     </section></div>}
 
-    {collageResult && <div className="modal-backdrop collage-backdrop" onMouseDown={() => setCollageResult(null)}><section className="collage-result-modal" onMouseDown={event => event.stopPropagation()}><header><div><small>Render complete</small><h2>Your outfit collage is ready.</h2><p>{collageResult.assetCount} source-backed images with the saved panel sizes, crops, manifest and evidence bundle.</p></div><button type="button" className="modal-close" onClick={() => setCollageResult(null)} aria-label="Close"><Icon name="close"/></button></header><div className="collage-result-frame"><img src={collageResult.previewUrl} alt="Generated outfit collage preview"/></div><footer><span><Icon name="check"/>Saved layout applied · originals untouched</span><div><a className="ghost" href={collageResult.bundleUrl} target="_blank" rel="noreferrer"><Icon name="download"/>Evidence bundle</a><a className="download" href={collageResult.previewUrl} target="_blank" rel="noreferrer"><Icon name="external"/>Open full size</a></div></footer></section></div>}
+    {collageResult && <div className="modal-backdrop collage-backdrop" onMouseDown={() => setCollageResult(null)}><section className="collage-result-modal" onMouseDown={event => event.stopPropagation()}><header><div><small>Render complete</small><h2>Your outfit collage is ready.</h2><p>{collageResult.assetCount} source-backed images{collageResult.canvasFormat ? ` · ${collageResult.canvasFormat === "instagram_portrait" ? "Instagram portrait" : "Instagram landscape"} · ${pretty(collageResult.layoutTemplate || "balanced_grid")}` : ""}, with saved crops, manifest and evidence bundle.</p></div><button type="button" className="modal-close" onClick={() => setCollageResult(null)} aria-label="Close"><Icon name="close"/></button></header><div className={`collage-result-frame ${collageResult.canvasFormat === "instagram_landscape" ? "is-landscape" : ""}`}><img src={collageResult.previewUrl} alt="Generated outfit collage preview"/></div><footer><span><Icon name="check"/>Saved layout applied · originals untouched</span><div><a className="ghost" href={collageResult.bundleUrl} target="_blank" rel="noreferrer"><Icon name="download"/>Evidence bundle</a><a className="download" href={collageResult.previewUrl} target="_blank" rel="noreferrer"><Icon name="external"/>Open full size</a></div></footer></section></div>}
     {toast && <div className="toast" role="status" aria-live="polite"><Icon name="spark"/><span>{toast}</span></div>}
   </main>;
 }
