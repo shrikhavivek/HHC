@@ -29,6 +29,19 @@
 .filters::-webkit-scrollbar-thumb { background:#b68e9b; border-radius:8px; }
 .collage-result-frame { padding:0; background:#292128; }
 .collage-result-frame img { box-shadow:none; }
+.collage-editor-modal > header > div:first-child { min-width:0; }
+.editor-window-actions { display:flex; align-items:center; flex-shrink:0; gap:8px; }
+.editor-size-toggle { display:inline-flex; align-items:center; justify-content:center; gap:8px; min-width:40px; min-height:40px; padding:8px 12px; border:1px solid var(--line); border-radius:6px; font:600 12px/1.4 Manrope,sans-serif; cursor:pointer; white-space:nowrap; }
+.collage-editor-backdrop.is-maximized { padding:0; }
+.collage-editor-modal.is-maximized { width:100%; max-width:none; height:100dvh; max-height:100dvh; border:0; border-radius:0; }
+@media(min-width:1200px) {
+  .collage-editor-modal.is-maximized .collage-editor-body { grid-template-columns:minmax(0,1fr) minmax(0,1fr); }
+}
+@media(max-width:640px) {
+  .editor-size-toggle { width:40px; padding:8px; }
+  .editor-size-toggle > span { display:none; }
+  .collage-editor-modal > header { gap:12px; }
+}
 @media(max-width:900px) {
   .collage-editor-body { display:block; overflow-y:auto; scrollbar-width:auto; }
   .collage-editor-modal :is(.selected-panel-list,.available-panel-list) { overflow:visible; }

@@ -259,6 +259,94 @@ test("editorial polish shows the full collage while adjusting filters", async ({
   }
 });
 
+test("editorial polish maximizes and restores without losing collage edits", async ({ page }) => {
+  await login(page);
+  await page.getByRole("button", { name: "Edit collage & sources", exact: true }).click();
+  const editor = page.locator(".collage-editor-modal");
+  const originalBounds = await editor.boundingBox();
+  await editor.getByRole("button", { name: /^Resize or crop/ }).first().click();
+  const caption = editor.getByLabel("Photo caption / designer credit");
+  await caption.fill("Full-screen editing test");
+  const undo = editor.getByRole("button", { name: /Undo/ });
+  await expect(undo).toBeEnabled();
+  await editor.getByRole("button", { name: "Maximize collage editor", exact: true }).click();
+  const restore = editor.getByRole("button", { name: "Restore collage editor size", exact: true });
+  await expect(restore).toHaveAttribute("aria-pressed", "true");
+  await expect(restore).toBeFocused();
+  expect(await editor.boundingBox()).toEqual({ x: 0, y: 0, width: 1440, height: 1000 });
+  await expect(caption).toHaveValue("Full-screen editing test");
+  await expect(undo).toBeEnabled();
+  await expect(editor.getByRole("button", { name: "Save & re-render", exact: true })).toBeInViewport({ ratio: 1 });
+  await page.screenshot({ path: "test-results/collage-editor-maximized.png" });
+  await restore.click();
+  expect(await editor.boundingBox()).toEqual(originalBounds);
+  await expect(caption).toHaveValue("Full-screen editing test");
+  await editor.getByRole("button", { name: "Maximize collage editor", exact: true }).click();
+  await page.keyboard.press("Escape");
+  await expect(editor).toBeVisible();
+  expect(await editor.boundingBox()).toEqual(originalBounds);
+  await expect(caption).toHaveValue("Full-screen editing test");
+  page.once("dialog", dialog => dialog.accept());
+  await editor.getByRole("button", { name: "Close collage editor", exact: true }).click();
+  await expect(editor).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Edit collage & sources", exact: true })).toBeFocused();
+  await page.getByRole("button", { name: "Edit collage & sources", exact: true }).click();
+  await expect(editor.getByRole("button", { name: "Maximize collage editor", exact: true })).toHaveAttribute("aria-pressed", "false");
+});
+
+test("editorial polish full-screen editor fits mobile and short windows", async ({ page }) => {
+  await login(page);
+  for (const viewport of [{ width: 390, height: 844 }, { width: 320, height: 740 }, { width: 844, height: 390 }]) {
+    await page.setViewportSize(viewport);
+    await page.getByRole("button", { name: "Edit collage & sources", exact: true }).click();
+    const editor = page.locator(".collage-editor-modal");
+    const toggle = editor.getByRole("button", { name: "Maximize collage editor", exact: true });
+    await expect(toggle).toBeInViewport({ ratio: 1 });
+    await toggle.focus();
+    await page.keyboard.press("Enter");
+    expect(await editor.boundingBox()).toEqual({ x: 0, y: 0, ...viewport });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await expect(editor.getByRole("button", { name: "Restore collage editor size", exact: true })).toBeInViewport({ ratio: 1 });
+    await expect(editor.getByRole("button", { name: "Save & re-render", exact: true })).toBeInViewport({ ratio: 1 });
+    await editor.locator(".editor-upload-panel").scrollIntoViewIfNeeded();
+    await expect(editor.locator(".editor-upload-panel")).toBeInViewport();
+    await page.screenshot({ path: `test-results/collage-editor-maximized-${viewport.width}.png` });
+    await page.keyboard.press("Escape");
+    await expect(toggle).toHaveAttribute("aria-pressed", "false");
+    await page.keyboard.press("Escape");
+    await expect(editor).toHaveCount(0);
+  }
+});
+
+test("editorial polish uses readable text throughout the studio", async ({ page }) => {
+  const fontSize = (selector: string) => page.locator(selector).first().evaluate(element => parseFloat(getComputedStyle(element).fontSize));
+  await page.goto("/");
+  expect(await fontSize(".auth-form-header p")).toBeGreaterThanOrEqual(16);
+  expect(await fontSize(".auth-field label")).toBeGreaterThanOrEqual(15);
+  expect(await fontSize(".auth-form-footnote")).toBeGreaterThanOrEqual(14);
+  expect(await fontSize(".auth-form-footnote strong")).toBeGreaterThanOrEqual(14);
+  await login(page);
+  expect(await fontSize(".case-copy > p")).toBeGreaterThanOrEqual(16);
+  expect(await fontSize(".metrics small")).toBeGreaterThanOrEqual(14);
+  expect(await fontSize(".hero-deck")).toBeGreaterThanOrEqual(32);
+  expect(await fontSize(".look-facts dd")).toBeGreaterThanOrEqual(16);
+  expect(await fontSize(".asset-tile-copy footer > span")).toBeGreaterThanOrEqual(14);
+  await page.getByRole("button", { name: "Write story", exact: true }).click();
+  expect(await fontSize(".edition-form label")).toBeGreaterThanOrEqual(15);
+  expect(await fontSize(".edition-form textarea")).toBeGreaterThanOrEqual(16);
+  await page.getByRole("button", { name: "Close editorial workspace" }).click();
+  await page.getByRole("button", { name: "Edit collage & sources", exact: true }).click();
+  expect(await fontSize(".collage-editor-modal p")).toBeGreaterThanOrEqual(16);
+  expect(await fontSize(".panel-sort-card small")).toBeGreaterThanOrEqual(14);
+  expect(await fontSize(".filter-presets button")).toBeGreaterThanOrEqual(15);
+  expect(await fontSize(".collage-rights-tags span")).toBeGreaterThanOrEqual(12);
+  await page.evaluate(() => { document.documentElement.style.fontSize = "125%"; });
+  expect(await fontSize(".filter-presets button")).toBeGreaterThanOrEqual(18);
+  await page.getByRole("button", { name: "Maximize collage editor", exact: true }).click();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: "test-results/readable-editor-large-text.png" });
+});
+
 test("private images and API reads require a session", async ({ request }) => {
   expect((await request.get("/media/static/look-1.png")).status()).toBe(401);
   expect((await request.get("/api/backend/cases")).status()).toBe(401);

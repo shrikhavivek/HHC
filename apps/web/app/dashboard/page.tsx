@@ -283,6 +283,8 @@ function Icon({ name, size = 20 }: { name: string; size?: number }) {
     arrow: <path d="m9 18 6-6-6-6"/>,
     check: <path d="m5 12 4 4L19 6"/>,
     close: <path d="M6 6l12 12M18 6 6 18"/>,
+    maximize: <path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/>,
+    restore: <><path d="M8 8V3h13v13h-5"/><rect x="3" y="8" width="13" height="13" rx="1"/></>,
     logout: <><path d="M10 5H5v14h5"/><path d="M14 8l4 4-4 4M18 12H9"/></>,
     link: <><path d="M10 13a5 5 0 0 0 7.5.5l2-2a5 5 0 0 0-7-7l-1.2 1.2"/><path d="M14 11a5 5 0 0 0-7.5-.5l-2 2a5 5 0 0 0 7 7l1.2-1.2"/></>,
     download: <><path d="M12 3v12m0 0 5-5m-5 5-5-5"/><path d="M5 21h14"/></>,
@@ -827,6 +829,7 @@ export default function DashboardPage() {
   const [candidateIndex, setCandidateIndex] = useState(0);
   const [collageResult, setCollageResult] = useState<CollageResult | null>(null);
   const [showCollageEditor, setShowCollageEditor] = useState(false);
+  const [editorMaximized, setEditorMaximized] = useState(false);
   const [editorPanelIds, setEditorPanelIds] = useState<string[]>([]);
   const [editorPanelOptions, setEditorPanelOptions] = useState<Record<string, PanelLayoutOption>>({});
   const [editorCanvasFormat, setEditorCanvasFormat] = useState<CanvasFormat>("instagram_portrait");
@@ -863,8 +866,11 @@ export default function DashboardPage() {
     if (editorBusy || (editorDirty && !window.confirm("Discard the unsaved collage changes?"))) return;
     setShowCollageEditor(false);
   }
-  const closeEditorRef = useRef(closeCollageEditor);
-  closeEditorRef.current = closeCollageEditor;
+  const escapeEditorRef = useRef(closeCollageEditor);
+  escapeEditorRef.current = () => {
+    if (editorMaximized) setEditorMaximized(false);
+    else closeCollageEditor();
+  };
   useEffect(() => {
     if (!showCollageEditor) return;
     const dialog = document.querySelector<HTMLElement>(".collage-editor-modal");
@@ -874,7 +880,7 @@ export default function DashboardPage() {
     const focusable = () => [...(dialog?.querySelectorAll<HTMLElement>('button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),a[href],[tabindex="0"]') || [])].filter(item => item.offsetParent !== null);
     focusable()[0]?.focus();
     const keys = (event: KeyboardEvent) => {
-      if (event.key === "Escape") { event.preventDefault(); closeEditorRef.current(); }
+      if (event.key === "Escape") { event.preventDefault(); escapeEditorRef.current(); }
       if (event.key !== "Tab") return;
       const items = focusable(), first = items[0], last = items[items.length - 1];
       if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
@@ -1099,6 +1105,7 @@ export default function DashboardPage() {
       adjustments: { ...DEFAULT_IMAGE_ADJUSTMENTS, ...(savedWatermark.adjustments || {}) },
     } : null);
     setTuningPanelId(null);
+    setEditorMaximized(false);
     setShowCollageEditor(true);
     setEditorExportScale(selected.collage_editor.export_scale || 1);
   }
@@ -1423,8 +1430,8 @@ export default function DashboardPage() {
       <details className="manual-reddit-intake"><summary><span>Manual Reddit intake</span><small>Use when automated media extraction is unavailable</small></summary><form onSubmit={submitIntake}><label>Reddit permalink<input required name="reddit_url" type="url" placeholder="https://www.reddit.com/r/BollywoodFashion/comments/…"/></label><label>Post title<input required name="title" placeholder="Celebrity in Designer at Event"/></label><div className="form-row"><label>Celebrity<input name="celebrity" placeholder="Unresolved"/></label><label>Designer<input name="designer" placeholder="Unresolved"/></label></div><label>Event<input name="event_name" placeholder="Unresolved"/></label><label>Description<textarea name="body" placeholder="Paste the source description or add editor notes…"/></label><footer><button className="ghost" type="submit">Create context-review case</button></footer></form></details>
     </section></div>}
 
-    {showCollageEditor && selected && <div className="modal-backdrop collage-editor-backdrop" onMouseDown={closeCollageEditor}><section className="collage-editor-modal" role="dialog" aria-modal="true" aria-labelledby="collage-editor-title" onMouseDown={event => event.stopPropagation()}>
-      <header><div><small>Collage workspace</small><h2 id="collage-editor-title">Edit this collage.</h2><p>Reorder, replace, resize, or crop each image, then review its fashion-archive history and source rights in the same panel.</p></div><button type="button" className="modal-close" onClick={closeCollageEditor} disabled={editorBusy} aria-label="Close collage editor"><Icon name="close"/></button></header>
+    {showCollageEditor && selected && <div className={`modal-backdrop collage-editor-backdrop${editorMaximized ? " is-maximized" : ""}`} onMouseDown={closeCollageEditor}><section className={`collage-editor-modal${editorMaximized ? " is-maximized" : ""}`} role="dialog" aria-modal="true" aria-labelledby="collage-editor-title" onMouseDown={event => event.stopPropagation()}>
+      <header><div><small>Collage workspace</small><h2 id="collage-editor-title">Edit this collage.</h2><p>Reorder, replace, resize, or crop each image, then review its fashion-archive history and source rights in the same panel.</p></div><div className="editor-window-actions"><button type="button" className="editor-size-toggle" onClick={() => setEditorMaximized(current => !current)} aria-pressed={editorMaximized} aria-label={editorMaximized ? "Restore collage editor size" : "Maximize collage editor"} title={editorMaximized ? "Restore current layout (Esc)" : "Expand editor to full screen"}><Icon name={editorMaximized ? "restore" : "maximize"} size={18}/><span>{editorMaximized ? "Restore" : "Full screen"}</span></button><button type="button" className="modal-close" onClick={closeCollageEditor} disabled={editorBusy} aria-label="Close collage editor"><Icon name="close"/></button></div></header>
       <div className="collage-editor-summary"><span><b>{editorSelectedPanels.length}</b> selected panels</span><span><Icon name="image" size={13}/>{editorCanvasFormat === "instagram_portrait" ? "Instagram portrait · 4:5" : "Instagram landscape · 1.91:1"}</span><span>{LAYOUT_TEMPLATES.find(item => item.id === editorLayoutTemplate)?.label}</span><span>{editorWatermark?.enabled ? "HHC watermark ready" : "Watermark optional"}</span></div>
       <div className="studio-history-bar" inert={editorBusy}><button type="button" onClick={undoHistory.undo} disabled={!undoHistory.canUndo || editorBusy}>↶ Undo</button><button type="button" onClick={undoHistory.redo} disabled={!undoHistory.canRedo || editorBusy}>↷ Redo</button><span>{editorDirty ? "Unsaved changes" : "Saved version"} · Ctrl / ⌘ Z to undo</span></div>
       <div className="collage-editor-body" inert={editorBusy} tabIndex={0} role="region" aria-label="Collage editing workspace">

@@ -1,0 +1,70 @@
+:root {
+  --text-body: 1rem;
+  --text-control: .9375rem;
+  --text-meta: .875rem;
+  --text-caption: .75rem;
+}
+
+.auth-shell :is(.auth-access, .auth-image-label, .auth-kicker, .auth-footer, .studio-brand-copy small) { font-size: var(--text-caption); line-height: 1.6; letter-spacing: .08em; }
+.auth-shell .auth-visual-copy > p { font-size: 1.125rem; line-height: 1.8; max-width: 440px; }
+.auth-shell :is(.auth-form-header p, .auth-input-shell input, .auth-submit) { font-size: var(--text-body); line-height: 1.6; }
+.auth-shell .auth-input-shell input::placeholder { font-size: var(--text-body); }
+.auth-shell :is(.auth-field label, .auth-input-shell button, .auth-error, .auth-helper) { font-size: var(--text-control); line-height: 1.6; }
+.auth-shell :is(.auth-form-footnote, .auth-form-footnote strong, .auth-manifesto p) { font-size: var(--text-meta); line-height: 1.8; }
+
+.studio-shell[data-theme] { font-size: var(--text-body); }
+.studio-shell[data-theme] :is(button, textarea, select, .ghost, .download, .source-link) { font-size: var(--text-control); line-height: 1.5; }
+.studio-shell[data-theme] :is(input:not([type=range]):not([type=checkbox]), textarea, select) { font-size: var(--text-body); }
+.studio-shell[data-theme] :is(p, .edition-story-preview, .edition-hint, .modal-note, .toast) { font-size: var(--text-body); line-height: 1.7; }
+.studio-shell[data-theme] :is(label, .panel-range, .crop-mode-control > span, .watermark-toolbar span) { font-size: var(--text-control); line-height: 1.6; }
+.studio-shell[data-theme] :is(small, .header-rail, .eyebrow, .workspace-crumb, .edition-date-note, .workbench-kicker, .page-footer, .edition-save-state, .edition-timeline span, .edition-version-grid, .edition-run-list, .studio-history-bar span, .collage-editor-summary, .collage-editor-summary span, .all-panels-used > span, .collage-result-modal > footer > span) { font-size: var(--text-meta); line-height: 1.6; letter-spacing: .025em; }
+.studio-shell[data-theme] :is(.studio-sidebar .nav-copy strong, .studio-sidebar .system-card strong, .studio-sidebar .profile strong, .hero-explore) { font-size: var(--text-body); line-height: 1.5; }
+.studio-shell[data-theme] :is(.studio-sidebar .nav-item b, .studio-brand-copy small) { font-size: var(--text-caption); line-height: 1.5; }
+.studio-shell[data-theme] .studio-hero .hero-row > div > p:not(.hero-deck) { font-size: 1.125rem; line-height: 1.75; }
+.studio-shell[data-theme] .hero-deck { font-size: 2rem; line-height: 1.25; }
+.studio-shell[data-theme] .studio-sidebar .nav-item b { font-size: var(--text-meta); }
+.studio-shell[data-theme] .look-facts dd { font-size: var(--text-body); }
+.studio-shell[data-theme] :is(.metrics article span, .case-copy footer > span, .case-copy footer > b, .review-meta, .automatic-draft-copy > div span, .asset-tile footer, .blueprint-output > span, .provider-details > summary, .provider-stages > span) { font-size: var(--text-meta); line-height: 1.6; }
+.studio-shell[data-theme] :is(.status, .status-pill, .fashion-chip, .look-facts dt, .look-facts dd > span, .asset-badges > b, .asset-badges > i, .asset-tile-image > span, .automatic-draft-image > span, .source-support-list span, .grade, .demo-chip, .demo-image-stamp, .blueprint-preview span) { font-size: var(--text-caption); line-height: 1.5; letter-spacing: .025em; }
+.studio-shell[data-theme] :is(.asset-tile strong, .panel-sort-card strong, .available-panel-grid strong, .watermark-toolbar strong, .watermark-filter-section > div:first-child strong) { font-size: 1.375rem; line-height: 1.3; }
+.studio-shell[data-theme] :is(.collage-context-panel, .collage-filter-panel, .watermark-editor-panel, .editor-upload-panel) > summary b { font-size: 1.375rem; line-height: 1.3; }
+.studio-shell[data-theme] :is(.editor-section-heading > span, .layout-picker-heading > span, .layout-template-options > button > em, .collage-context-content section > header > span, .collage-rights-tags span, .collage-archive-list article > span, .watermark-position-readout span, .selection-size, .draw-crop-prompt, .editor-upload-panel label em) { font-size: var(--text-caption); line-height: 1.5; }
+.studio-shell[data-theme] :is(.panel-range b, .image-adjustment-ranges b, .watermark-controls b) { font-size: inherit; }
+.studio-shell[data-theme] :is(.collage-rights-notice, .watermark-preview-missing, .collage-editor-modal > footer > div:first-child, .collage-context-content section > header strong, .collage-rights-list strong, .collage-archive-list strong, .canvas-format-options button strong, .layout-template-options > button > span:not(.layout-template-preview) strong) { font-size: var(--text-meta); line-height: 1.6; }
+.studio-shell[data-theme] :is(.watermark-note, .crop-keyboard-note) { font-size: var(--text-meta) !important; line-height: 1.7; }
+.studio-shell[data-theme] :is(.filters button, .edition-command-actions button, .editor-size-toggle, .filter-presets button, .crop-mode-control button, .watermark-toolbar button) { min-height: 44px; }
+.studio-shell[data-theme] :is(.collage-context-panel, .collage-filter-panel, .watermark-editor-panel, .editor-upload-panel) > summary { flex-wrap: wrap; gap: 8px 14px; }
+.studio-shell[data-theme] :is(.collage-context-panel, .collage-filter-panel, .watermark-editor-panel, .editor-upload-panel) > summary small { text-align: left; }
+.studio-shell[data-theme] .collage-context-content section > header { flex-wrap: wrap; }
+.studio-shell[data-theme] .collage-context-content section > header strong { white-space: normal; }
+.studio-shell[data-theme] .collage-rights-list article { grid-template-columns: minmax(0, 1fr) 32px; gap: 6px 10px; padding: 12px; }
+.studio-shell[data-theme] .collage-rights-tags { grid-column: 1; justify-content: flex-start; }
+.studio-shell[data-theme] .collage-rights-list article > :is(a, i) { grid-column: 2; grid-row: 1 / span 2; }
+.studio-shell[data-theme] .collage-rights-list :is(strong, small) { white-space: normal; overflow-wrap: anywhere; }
+.studio-shell[data-theme] .available-panel-grid article > div { min-width: 0; }
+.studio-shell[data-theme] .available-panel-grid :is(strong, p) { white-space: normal; overflow-wrap: anywhere; }
+.studio-shell[data-theme] :is(.look-facts > div, .metrics article, .edition-command-title, .editor-window-actions) { min-width: 0; }
+.studio-shell[data-theme] :is(.look-facts dd, .metrics small, .metrics article span, .page-footer, .collage-editor-summary) { overflow-wrap: anywhere; }
+.studio-shell[data-theme] .editor-window-actions { flex-shrink: 0; }
+.studio-shell[data-theme] .asset-tile-copy footer { flex-wrap: wrap; }
+.studio-shell[data-theme] .asset-tile-copy footer > :is(span, a) { font-size: var(--text-meta); line-height: 1.6; }
+.studio-shell[data-theme] .asset-board > header > span { font-size: var(--text-caption); }
+.studio-shell[data-theme] :is(.source-context-hints, .manual-reddit-intake) > summary { flex-wrap: wrap; }
+
+@media (max-width: 940px) {
+  .studio-shell[data-theme] .studio-sidebar .nav-item::after { font-size: var(--text-caption); line-height: 1.3; overflow-wrap: anywhere; }
+}
+@media (max-width: 640px) {
+  .auth-shell .auth-visual-copy > p { font-size: var(--text-body); }
+  .studio-shell[data-theme] .hero-deck { font-size: 1.75rem; }
+  .studio-shell[data-theme] :is(.metrics small, .metrics article span) { font-size: .8125rem; }
+  .studio-shell[data-theme] .studio-hero .hero-row > div > p:not(.hero-deck) { font-size: var(--text-body); }
+  .studio-shell[data-theme] .category-editor { align-items: flex-start; }
+  .studio-shell[data-theme] .category-editor > div { flex-wrap: wrap; }
+  .studio-shell[data-theme] .review-heading-actions { flex-wrap: wrap; gap: 12px; }
+  .studio-shell[data-theme] .page-footer { flex-wrap: wrap; text-align: center; }
+  .studio-shell[data-theme] .collage-editor-modal > header { gap: 8px; }
+  .studio-shell[data-theme] .editor-window-actions { gap: 6px; }
+  .studio-shell[data-theme] .collage-editor-modal > footer > div:last-child { display: flex; gap: 8px; }
+  .studio-shell[data-theme] .collage-editor-modal > footer > div:last-child > button { flex: 1 1 0; min-width: 0; padding-inline: 8px; }
+}
