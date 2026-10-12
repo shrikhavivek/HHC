@@ -2,6 +2,10 @@
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { EditorialDesk } from "@/components/editorial-desk";
+import { MatchVerification } from "@/components/match-verification";
+import { OutfitContext } from "@/components/outfit-context";
+import { useUndoHistory } from "@/lib/use-undo-history";
 
 type WorkspaceView = "today" | "women" | "men" | "both" | "pending" | "reviewed";
 type Dashboard = {
@@ -18,6 +22,7 @@ type Dashboard = {
   last_run?: { id: string; status: string; created_at: string } | null;
 };
 type CaseSummary = {
+  context_revision?: number;
   id: string;
   title: string;
   celebrity: string;
@@ -48,7 +53,7 @@ type Candidate = {
   source_grade: string;
   rights_status: string;
   evidence: Evidence[];
-  checks: { same_photo?: boolean; same_event?: boolean; chronology?: boolean; identity?: boolean; contradictions?: string[]; landmarks?: string[] };
+  checks: { editor_verified?: boolean; same_photo?: boolean; same_event?: boolean; chronology?: boolean; identity?: boolean; contradictions?: string[]; landmarks?: string[] };
   decision?: { id?: string; decision: string; reason: string; editor_id: string };
 };
 type OutfitAsset = {
@@ -95,6 +100,11 @@ type PanelLayoutOption = {
   focal_y: number;
   zoom: number;
   crop_rect?: CropRectangle | null;
+  rotation_degrees?: 0 | 90 | 180 | 270;
+  flip_horizontal?: boolean;
+  flip_vertical?: boolean;
+  caption?: string;
+  adjustments?: ImageAdjustments;
 };
 type CanvasFormat = "instagram_portrait" | "instagram_landscape";
 type LayoutTemplate = "balanced_grid" | "hero_focus" | "editorial_split";
@@ -125,6 +135,8 @@ type WatermarkLayout = {
   adjustments: ImageAdjustments;
 };
 type CollageEditor = {
+  export_scale?: number;
+  revision?: number;
   panels: CollagePanel[];
   default_ids: string[];
   selected_ids: string[];
@@ -152,7 +164,7 @@ type CollageResult = { previewUrl: string; bundleUrl: string; assetCount: number
 const PENDING_STATUSES = new Set(["review_ready", "context_review", "needs_research", "research_queued"]);
 const REVIEWED_STATUSES = new Set(["approved", "rejected", "auto_rejected", "similar_not_same"]);
 const DEFAULT_CROP_RECT: CropRectangle = { x: 0, y: 0, width: 1, height: 1 };
-const DEFAULT_PANEL_OPTION: PanelLayoutOption = { width_scale: 1, crop_mode: "fit", focal_x: .5, focal_y: .5, zoom: 1, crop_rect: DEFAULT_CROP_RECT };
+const DEFAULT_PANEL_OPTION: PanelLayoutOption = { width_scale: 1, crop_mode: "fit", focal_x: .5, focal_y: .5, zoom: 1, crop_rect: DEFAULT_CROP_RECT, rotation_degrees: 0, flip_horizontal: false, flip_vertical: false, caption: "", adjustments: { brightness: 1, contrast: 1, saturation: 1, grayscale: 0 } };
 const DEFAULT_IMAGE_ADJUSTMENTS: ImageAdjustments = { brightness: 1, contrast: 1, saturation: 1, grayscale: 0 };
 const DEFAULT_WATERMARK_LAYOUT = { enabled: true, center_x: .82, center_y: .9, width: .2, height: null, rotation_degrees: 0, opacity: .72, adjustments: DEFAULT_IMAGE_ADJUSTMENTS };
 const CANVAS_FORMATS: { id: CanvasFormat; label: string; detail: string }[] = [
@@ -306,6 +318,10 @@ function ManualCropEditor({ image, label, option, onChange }: {
   const [drawingNew, setDrawingNew] = useState(false);
   const [dragging, setDragging] = useState<string | null>(null);
   const stageRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => stageRef.current?.scrollIntoView({ block: "center", behavior: "instant" }));
+    return () => cancelAnimationFrame(frame);
+  }, []);
   const rect = { ...DEFAULT_CROP_RECT, ...(option.crop_rect || {}) };
   const drag = useRef<{
     pointerId: number;
@@ -716,7 +732,7 @@ function AssetBoard({ assets }: { assets: OutfitAsset[] }) {
       {assets.map(item => <article className={`asset-tile asset-${item.role}`} key={item.id}>
         <div className="asset-tile-image"><img src={asset(item.image_path)} alt={`${item.label} for ${item.designer}`}/><span>{assetRoleLabel(item.role)}</span></div>
         <div className="asset-tile-copy">
-          <div className="asset-badges"><b>Grade {item.source_grade}</b><i className={item.exact_match && item.verified_source ? "verified" : "pending"}>{item.exact_match && item.verified_source ? "Exact outfit verified" : "Verify outfit"}</i></div>
+          <div className="asset-badges"><b>Grade {item.source_grade}</b><i className={item.exact_match && item.verified_source ? "verified" : "pending"}>{item.exact_match && item.verified_source ? "Source checked" : "Review outfit"}</i></div>
           <strong>{item.label}</strong><p>{item.publisher}</p>
           <footer><span>{item.include_in_collage ? "Included in collage" : "Reference only"} · {pretty(item.rights_status)}</span><a href={item.source_url} target="_blank" rel="noreferrer">Source <Icon name="external" size={10}/></a></footer>
         </div>
@@ -742,7 +758,7 @@ function CollageArchiveRights({ selected }: { selected: CaseDetail }) {
       detail: `Historical candidate · Grade ${item.source_grade}`,
       status: item.rights_status,
       source: item.evidence[0]?.url || "",
-      exact: Boolean(item.checks.identity),
+      exact: Boolean(item.checks.editor_verified),
       official: false,
     })),
     ...selected.assets.map(item => ({
@@ -761,7 +777,7 @@ function CollageArchiveRights({ selected }: { selected: CaseDetail }) {
   return <details className="collage-context-panel" open>
     <summary><span><Icon name="shield" size={15}/><b>Fashion archive &amp; rights</b></span><small>{selected.candidates.length} archive lead{selected.candidates.length === 1 ? "" : "s"} · {rightsEntries.length} sources</small></summary>
     <div className="collage-context-content">
-      <section className="collage-archive-section">
+      {selected.candidates.length > 0 && <section className="collage-archive-section">
         <header><div><small>Fashion archive</small><strong>Past outfit research</strong></div><span>{selected.candidates.length}</span></header>
         {selected.candidates.length ? <div className="collage-archive-list">{selected.candidates.map(item => <article key={item.id}>
           <img src={asset(item.image_path)} alt={`${item.person} archive reference`}/>
@@ -770,12 +786,13 @@ function CollageArchiveRights({ selected }: { selected: CaseDetail }) {
         </article>)}</div> : <p className="collage-context-empty">No exact historical outfit has qualified yet.</p>}
       </section>
 
+      }
       <section className="collage-rights-section">
         <header><div><small>Rights review</small><strong>Sources attached to this collage</strong></div><span className={blocked ? "has-blocked" : ""}>{blocked ? `${blocked} blocked` : `${verified} verified`}</span></header>
         <div className="collage-rights-notice"><Icon name="shield" size={14}/><span>A public URL is not a publishing licence. Confirm usage and credit before publishing.</span></div>
         <div className="collage-rights-list">{rightsEntries.map(item => <article className={isBlocked(item.status) ? "is-blocked" : ""} key={item.id}>
           <div><strong>{item.label}</strong><small>{item.detail}</small></div>
-          <div className="collage-rights-tags"><span>{isBlocked(item.status) ? "Blocked" : pretty(item.status)}</span>{item.official && <span>Official</span>}{item.exact && <span>Exact</span>}</div>
+          <div className="collage-rights-tags"><span>{isBlocked(item.status) ? "Blocked" : pretty(item.status)}</span>{item.official && <span>Official</span>}{item.exact && <span>Outfit reference</span>}</div>
           {item.source ? <a href={item.source} target="_blank" rel="noreferrer" aria-label={`Open source for ${item.label}`}><Icon name="external" size={12}/></a> : <i title="Source URL missing">—</i>}
         </article>)}</div>
       </section>
@@ -816,22 +833,73 @@ export default function DashboardPage() {
   const [editorWatermark, setEditorWatermark] = useState<WatermarkLayout | null>(null);
   const [tuningPanelId, setTuningPanelId] = useState<string | null>(null);
   const [editorBusy, setEditorBusy] = useState(false);
+  const [editorExportScale, setEditorExportScale] = useState(1);
   const [uploadBusy, setUploadBusy] = useState(false);
   const [watermarkBusy, setWatermarkBusy] = useState(false);
   const [categoryBusy, setCategoryBusy] = useState(false);
+  const [profile, setProfile] = useState<{ username: string; demo: boolean } | null>(null);
+  const caseRequest = useRef(0);
+  const editorSnapshot = { panelIds: editorPanelIds, options: editorPanelOptions, format: editorCanvasFormat, layout: editorLayoutTemplate, adjustments: editorCollageAdjustments, watermark: editorWatermark, scale: editorExportScale };
+  const editorOriginal = useRef("");
+  const undoHistory = useUndoHistory(editorSnapshot, value => {
+    setEditorPanelIds(value.panelIds); setEditorPanelOptions(value.options);
+    setEditorCanvasFormat(value.format); setEditorLayoutTemplate(value.layout);
+    setEditorCollageAdjustments(value.adjustments); setEditorWatermark(value.watermark);
+    setEditorExportScale(value.scale);
+  }, showCollageEditor);
+  const editorDirty = showCollageEditor && Boolean(editorOriginal.current) && editorOriginal.current !== JSON.stringify(editorSnapshot);
+  useEffect(() => {
+    editorOriginal.current = showCollageEditor ? JSON.stringify(editorSnapshot) : "";
+  }, [showCollageEditor]);
+  useEffect(() => {
+    if (!editorDirty) return;
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [editorDirty]);
+  function closeCollageEditor() {
+    if (editorBusy || (editorDirty && !window.confirm("Discard the unsaved collage changes?"))) return;
+    setShowCollageEditor(false);
+  }
+  const closeEditorRef = useRef(closeCollageEditor);
+  closeEditorRef.current = closeCollageEditor;
+  useEffect(() => {
+    if (!showCollageEditor) return;
+    const dialog = document.querySelector<HTMLElement>(".collage-editor-modal");
+    const previous = document.activeElement as HTMLElement | null;
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const focusable = () => [...(dialog?.querySelectorAll<HTMLElement>('button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),a[href],[tabindex="0"]') || [])].filter(item => item.offsetParent !== null);
+    focusable()[0]?.focus();
+    const keys = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { event.preventDefault(); closeEditorRef.current(); }
+      if (event.key !== "Tab") return;
+      const items = focusable(), first = items[0], last = items[items.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+    };
+    document.addEventListener("keydown", keys);
+    return () => { document.removeEventListener("keydown", keys); document.body.style.overflow = overflow; previous?.focus(); };
+  }, [showCollageEditor]);
 
   async function openCase(id: string) {
-    const response = await fetch(`/api/backend/cases/${id}`, { cache: "no-store" });
-    if (!response.ok) throw new Error("Could not load case");
-    setSelected(await response.json());
-    setCandidateIndex(0);
+    const requestId = ++caseRequest.current;
+    try {
+      const response = await fetch(`/api/backend/cases/${id}`, { cache: "no-store" });
+      if (response.status === 401) { router.replace("/"); return; }
+      if (!response.ok) throw new Error("Could not load this outfit. Please try again.");
+      const data = await response.json();
+      if (requestId !== caseRequest.current) return;
+      setSelected(data); setCandidateIndex(0);
+    } catch (error) { if (requestId === caseRequest.current) setToast((error as Error).message); }
   }
 
-  async function load(silent = false) {
+  async function load(silent = false, quiet = false) {
     if (silent) setRefreshing(true); else setLoading(true);
     try {
       const session = await fetch("/api/auth/session", { cache: "no-store" });
       if (!session.ok) { router.replace("/"); return; }
+      setProfile(await session.json());
       const [dashboardResponse, casesResponse] = await Promise.all([
         fetch("/api/backend/dashboard", { cache: "no-store" }),
         fetch("/api/backend/cases", { cache: "no-store" }),
@@ -839,7 +907,7 @@ export default function DashboardPage() {
       if (!dashboardResponse.ok || !casesResponse.ok) throw new Error("Research API unavailable");
       setDashboard(await dashboardResponse.json());
       setCases(await casesResponse.json());
-      if (silent) setToast("Daily edition refreshed.");
+      if (silent && !quiet) setToast("Daily edition refreshed.");
     } catch {
       setToast("The research API is unavailable. Check Docker services.");
     } finally {
@@ -849,16 +917,23 @@ export default function DashboardPage() {
   }
 
   async function logout() {
-    await fetch("/api/auth/logout", { method: "POST" });
-    router.replace("/");
+    try {
+      const response = await fetch("/api/auth/logout", { method: "POST" });
+      if (!response.ok) { setToast("Could not end the session. Please retry."); return; }
+      router.replace("/");
+    } catch { setToast("Could not end the session. Please retry."); }
   }
 
   async function runAutomation() {
     setAutomationBusy(true);
     try {
-      const response = await fetch("/api/backend/runs/daily", { method: "POST" });
+      const response = await fetch("/api/backend/runs/refresh", { method: "POST" });
       const data = await response.json();
       if (!response.ok) return setToast(data.detail || "Daily automation could not run.");
+      if (data.status === "queued" || data.status === "running") {
+        setToast("Daily refresh queued. Follow its progress in Sources & schedule while you keep editing.");
+        return;
+      }
       setWorkspaceView("today");
       setFilter("all");
       setSearch("");
@@ -895,6 +970,15 @@ export default function DashboardPage() {
   }, []);
 
   useEffect(() => {
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible" && !showCollageEditor && !showIntake && !decisionMode) {
+        void load(true, true);
+      }
+    }, 60000);
+    return () => clearInterval(timer);
+  }, [showCollageEditor, showIntake, decisionMode]);
+
+  useEffect(() => {
     if (!toast) return;
     const timer = setTimeout(() => setToast(""), 4200);
     return () => clearTimeout(timer);
@@ -915,8 +999,8 @@ export default function DashboardPage() {
 
   const candidate = selected?.candidates?.[candidateIndex];
   const historicalMatch = candidate ? isHistorical(candidate.proposed_match_type) : false;
-  const approvedCandidates = selected?.candidates.filter(item => item.decision?.decision === "approved") || [];
-  const previewCandidates = approvedCandidates.length ? approvedCandidates : (candidate ? [candidate] : []);
+  const approvedCandidates = selected?.candidates.filter(item => item.decision?.decision === "approved" && item.checks.editor_verified) || [];
+  const previewCandidates = approvedCandidates;
   const historicalCandidates = previewCandidates.filter(item => isHistorical(item.proposed_match_type));
   const hasHistoricalPlan = historicalCandidates.length > 0;
   const supplementaryAssets = selected?.assets || [];
@@ -963,7 +1047,7 @@ export default function DashboardPage() {
       await load();
       if (caseId && workspaceView !== "pending") await openCase(caseId);
       if (workspaceView === "pending") setSelected(null);
-    } finally { setDecisionBusy(false); }
+    } catch { setToast("The decision could not be saved. Please try again."); } finally { setDecisionBusy(false); }
   }
 
   async function queueResearch() {
@@ -976,11 +1060,11 @@ export default function DashboardPage() {
       setToast(data.search?.status === "unavailable"
         ? "Reddit is rate-limiting archive search; the daily automation will retry without manual work."
         : data.matches
-          ? `${data.matches} exact archive match${data.matches === 1 ? "" : "es"} found and the collage was rebuilt.`
+          ? `${data.matches} archive lead${data.matches === 1 ? "" : "s"} found. Verify the outfit before approving a comparison.`
           : "Automated Reddit archive search completed; no exact outfit match was forced.");
       await load();
       await openCase(selected.id);
-    } finally { setResearchBusy(false); }
+    } catch { setToast("Research could not be completed. Your draft is safe; please try again."); } finally { setResearchBusy(false); }
   }
 
   async function generateCollage() {
@@ -993,7 +1077,7 @@ export default function DashboardPage() {
       const cacheKey = Date.now();
       setCollageResult({ previewUrl: `${asset(data.preview_url)}?v=${cacheKey}`, bundleUrl: data.bundle_url.replace(/^\/api\//, "/api/backend/"), assetCount: data.asset_count, canvasFormat: data.canvas_format, layoutTemplate: data.layout_template });
       setToast(`${data.asset_count}-image collage and evidence bundle created.`);
-    } finally { setCollageBusy(false); }
+    } catch { setToast("The preview could not be rendered. Please try again."); } finally { setCollageBusy(false); }
   }
 
   function openCollageEditor() {
@@ -1013,6 +1097,7 @@ export default function DashboardPage() {
     } : null);
     setTuningPanelId(null);
     setShowCollageEditor(true);
+    setEditorExportScale(selected.collage_editor.export_scale || 1);
   }
 
   function panelOption(panelId: string): PanelLayoutOption {
@@ -1061,6 +1146,8 @@ export default function DashboardPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          expected_revision: selected.collage_editor.revision || 0,
+          export_scale: editorExportScale,
           panel_ids: editorPanelIds,
           panel_options: selectedOptions,
           canvas_format: editorCanvasFormat,
@@ -1093,7 +1180,8 @@ export default function DashboardPage() {
       });
       setToast(`${editorCanvasFormat === "instagram_portrait" ? "Portrait" : "Landscape"} ${LAYOUT_TEMPLATES.find(item => item.id === editorLayoutTemplate)?.label.toLowerCase()} collage updated with ${data.asset_count} source-backed panel${data.asset_count === 1 ? "" : "s"}${data.watermark?.enabled ? " and the HHC watermark" : ""}.`);
       await openCase(caseId);
-    } finally { setEditorBusy(false); }
+    } catch { setToast("The collage could not be saved. Your edits are still open; please retry."); }
+    finally { setEditorBusy(false); }
   }
 
   async function uploadCollageImage(event: FormEvent<HTMLFormElement>) {
@@ -1225,8 +1313,8 @@ export default function DashboardPage() {
         <button type="button" className={`nav-item ${workspaceView === "reviewed" ? "active" : ""}`} onClick={() => switchView("reviewed")} aria-current={workspaceView === "reviewed" ? "page" : undefined}><Icon name="archive"/><span className="nav-copy"><strong>Reviewed</strong><small>Completed decisions</small></span><b>{reviewedCount}</b></button>
       </nav>
       <div className="sidebar-spacer"/>
-      <div className="system-card"><div className={`pulse ${providersLive ? "" : "standby"}`}/><div><strong>{providersLive ? "Research connected" : "Curated demo mode"}</strong><small>{providersLive ? "Live providers operational" : "Live providers pending"}</small></div></div>
-      <div className="profile"><span>SK</span><div><strong>Senior editor</strong><small>Secure demo session</small></div></div>
+      <div className="system-card"><div className={`pulse ${providersLive ? "" : "standby"}`}/><div><strong>{providersLive ? "Research enabled" : "Manual / demo mode"}</strong><small>{providersLive ? "Check Sources for health" : "Provider setup available"}</small></div></div>
+      <div className="profile"><span>{profile?.username.slice(0, 2).toUpperCase() || "H"}</span><div><strong>{profile?.username || "Editor"}</strong><small>{profile?.demo ? "Local demo session" : "WordPress editor"}</small></div></div>
     </aside>
 
     <section className="content studio-content">
@@ -1241,6 +1329,9 @@ export default function DashboardPage() {
         </div>
       </header>
 
+      <EditorialDesk selected={selected} onRefresh={() => { if (showCollageEditor || showIntake || decisionMode) return; if (selected) void openCase(selected.id); void load(); }}/>
+      {selected?.demo_data && <p className="edition-message">Demonstration case and placeholder photographs. Connect a source in Sources &amp; schedule to prepare real editorial images.</p>}
+      <p className="edition-message">Showing posts published today and yesterday (Asia/Kolkata). Men and Both show matching posts from the same dates; older looks remain in the research archive.</p>
       <header className="editorial-header studio-hero">
         <div className="header-rail"><span>{meta.short} / {editionCode}</span><i/><span>{dateLabel}</span></div>
         <div className="hero-row"><div><div className="eyebrow"><span/>Reddit + editor-selected public posts</div><h1>{meta.title} <em>{meta.accent}</em></h1><p>{meta.description}</p></div><div className="hero-seal"><span>{visibleCases.length.toString().padStart(2, "0")}</span><small>Visible<br/>outfits</small></div></div>
@@ -1269,7 +1360,7 @@ export default function DashboardPage() {
               <span className="case-index">{(index + 1).toString().padStart(2, "0")}</span><div className="case-thumb"><img src={asset(item.base_image)} alt={`${item.celebrity} in ${item.designer}`}/></div>
               <div className="case-copy"><div><StatusPill status={item.status}/><span className={`fashion-chip fashion-${item.fashion_category}`}>{fashionCategoryLabel(item.fashion_category)}</span><span className={`risk risk-${item.risk_level}`}>{item.risk_level}</span></div><strong>{item.celebrity}</strong><p>{item.designer} · {item.event_name}</p><footer><span>{item.event_date || "Date unresolved"}</span><b>{Math.round(item.confidence * 100)}% signal</b></footer></div><Icon name="arrow" size={15}/>
             </button>)}
-            {!loading && !visibleCases.length && <div className="empty enhanced-empty"><Icon name="search"/><strong>No matching outfits</strong><span>Clear the search or choose another filter.</span><button type="button" className="ghost" onClick={() => { setSearch(""); setFilter("all"); }}>Reset view</button></div>}
+            {!loading && !visibleCases.length && <div className="empty enhanced-empty"><Icon name="search"/><strong>No recent outfits in this view</strong><span>No matching posts from today or yesterday have been collected. Clear filters or run daily automation to check for new posts.</span><button type="button" className="ghost" onClick={() => { setSearch(""); setFilter("all"); }}>Reset view</button></div>}
           </div>
         </div>
 
@@ -1277,6 +1368,8 @@ export default function DashboardPage() {
           {!selected ? <div className="review-empty"><span>HHC</span><h2>No outfit selected</h2><p>Choose a look from the rail to open its editorial file.</p></div> : <>
             <div className="review-heading"><div><div className="review-meta"><StatusPill status={selected.status}/><span className={`fashion-chip fashion-${selected.fashion_category}`}>{selected.fashion_category === "unclassified" ? "Content desk open" : fashionCategoryLabel(selected.fashion_category)}</span>{selected.demo_data && <span className="demo-chip">Demonstration</span>}</div><h2>{selected.celebrity}</h2><p><b>{selected.designer}</b><i/>{selected.event_name}</p></div><div className="review-heading-actions"><div className="category-editor"><small>Content listing</small><div>{(["women", "men", "mixed"] as const).map(category => <button type="button" key={category} className={selected.fashion_category === category ? "active" : ""} onClick={() => void updateFashionCategory(category)} disabled={categoryBusy}>{category === "mixed" ? "Both" : pretty(category)}</button>)}</div></div><a className="source-link" href={selected.permalink} target="_blank" rel="noreferrer"><Icon name="external"/>{selected.source_type === "reddit_rss" ? "Reddit source" : "Public source"}</a></div></div>
 
+            <OutfitContext key={selected.id} selected={selected} onSaved={() => void openCase(selected.id)}/>
+            {candidate && <MatchVerification key={candidate.id} candidateId={candidate.id} currentDate={selected.event_date} earlierDate={candidate.event_date} onVerified={() => void openCase(selected.id)}/>}
             {selected.latest_collage && <section className="automatic-draft-card">
               <div className="automatic-draft-image"><img src={asset(selected.latest_collage.preview_url)} alt={`Automatic collage for ${selected.celebrity}`}/><span>Generated automatically</span></div>
               <div className="automatic-draft-copy"><small>Today’s ready-to-review output</small><h3>Instagram collage complete</h3><p>Every usable source image is assembled into the selected Instagram format. Open the editor to switch between portrait and landscape or choose one of three collage arrangements.</p><div><span><Icon name="check" size={13}/>{automaticPanelCount} source panel{automaticPanelCount === 1 ? "" : "s"} in one image</span><span><Icon name="shield" size={13}/>Draft only — never auto-published</span></div><footer><button type="button" className="primary" onClick={() => setCollageResult({ previewUrl: asset(selected.latest_collage!.preview_url), bundleUrl: selected.latest_collage!.bundle_url.replace(/^\/api\//, "/api/backend/"), assetCount: automaticPanelCount, canvasFormat: selected.collage_editor.canvas_format, layoutTemplate: selected.collage_editor.layout_template })}><Icon name="eye"/>View collage</button><button type="button" className="ghost" onClick={openCollageEditor}><Icon name="edit"/>Edit collage &amp; sources</button><a className="ghost" href={selected.latest_collage.bundle_url.replace(/^\/api\//, "/api/backend/")} target="_blank" rel="noreferrer"><Icon name="download"/>Evidence bundle</a></footer></div>
@@ -1284,7 +1377,6 @@ export default function DashboardPage() {
 
             {!candidate && <>
               <AssetBoard assets={supplementaryAssets}/>
-              <div className="no-candidate-state"><span><Icon name="search" size={22}/></span><small>Archive discovery</small><h3>No exact historical match found yet</h3><p>This source-only collage was still created automatically. Research can recheck the growing Reddit and imported-post archive using the title, description, designer attribution and image signals.</p><button type="button" className="primary" onClick={() => void queueResearch()} disabled={researchBusy}>{researchBusy ? "Checking sources…" : "Check for new outfits now"}</button></div>
             </>}
 
             {candidate && <>
@@ -1294,11 +1386,11 @@ export default function DashboardPage() {
                 <div className="compare-axis"><span>+</span><i/></div>
                 <figure><div className="image-label candidate"><span>Archive / Related look</span><b>{candidate.event_date || "Date open"}</b></div><div className="image-mat"><img src={asset(candidate.image_path)} alt={`${candidate.person} wearing ${candidate.designer}`}/></div>{selected.demo_data && <span className="demo-image-stamp">Demo visual · live archive pending</span>}<figcaption><span>02</span><div><small>Research candidate</small><strong>{candidate.person}</strong><p>{candidate.event_name}</p></div></figcaption></figure>
               </div>
-              <div className="storyline"><span>Why they belong together</span><p>{pretty(candidate.proposed_match_type)} · researched through title, description, designer attribution and garment landmarks.</p></div>
+              <div className="storyline"><span>{candidate.checks.editor_verified ? "Editor-verified relationship" : "Research lead · not yet verified"}</span><p>{pretty(candidate.proposed_match_type)} · {candidate.checks.editor_verified ? "Source evidence and earlier appearance confirmed by an editor." : "Suggested from source text and image signals. Compare garment construction, details and event dates before approval."}</p></div>
               <AssetBoard assets={supplementaryAssets}/>
               <section className="collage-blueprint" aria-label="Planned collage treatment"><div className="blueprint-copy"><small>Proposed story treatment</small><strong>{historicalMatch ? "Then & now outfit story" : "Complete multi-angle outfit study"}</strong><p>{historicalMatch ? "Place every current-post image and each approved historical match into one edge-to-edge collage." : "Place every current-post image and the verified original outfit, when available, into one edge-to-edge collage."}</p></div><div className="blueprint-preview" aria-hidden>{plannedAssets.slice(0, 6).map(item => <div key={item.id}><img src={asset(item.image_path)} alt=""/><span>{item.label}</span></div>)}</div><div className="blueprint-output"><small>One final image</small><strong>{plannedAssets.length} full-frame panels</strong><span>Edge-to-edge · zero gaps · source-tracked</span></div></section>
-              <div className="assessment-strip"><div><small>Relationship</small><strong>{pretty(candidate.proposed_match_type)}</strong></div><div><small>Visual signal</small><strong>{Math.round(candidate.visual_score * 100)}%</strong><span>Discovery aid</span></div><div><small>Source quality</small><strong className={`grade grade-${candidate.source_grade}`}>Grade {candidate.source_grade}</strong><span>{candidate.evidence[0]?.publisher}</span></div><div><small>Image rights</small><strong>{pretty(candidate.rights_status)}</strong></div></div>
-              <div className="evidence-grid"><section className="evidence-card"><div className="section-title"><div><small>Editorial verification</small><h3>The confidence file</h3></div><span>{candidate.checks.contradictions?.length ? "Review conflict" : "Clear"}</span></div><ul className="checks"><li className={!candidate.checks.same_photo ? "pass" : "fail"}><span><Icon name={!candidate.checks.same_photo ? "check" : "close"}/></span><div><strong>Original image check</strong><small>{candidate.checks.same_photo ? "Image hash indicates a duplicate" : "A distinct source photograph was found"}</small></div></li><li className={!candidate.checks.same_event ? "pass" : "fail"}><span><Icon name={!candidate.checks.same_event ? "check" : "close"}/></span><div><strong>Appearance check</strong><small>{candidate.checks.same_event ? "The same event and date were detected" : "This is an independently eligible appearance"}</small></div></li><li className={candidate.checks.identity ? "pass" : "warn"}><span><Icon name={candidate.checks.identity ? "check" : "search"}/></span><div><strong>Garment identity</strong><small>{candidate.checks.identity ? `Aligned: ${candidate.checks.landmarks?.join(", ")}` : "Stronger source support is still needed"}</small></div></li></ul></section><section className="source-card"><div className="section-title"><div><small>Provenance</small><h3>Source notes</h3></div><span className={`grade grade-${candidate.source_grade}`}>{candidate.source_grade}</span></div>{candidate.evidence.map((item, index) => <a href={item.url} target="_blank" rel="noreferrer" className="evidence-source" key={index}><div className="source-monogram">{item.publisher.slice(0, 2).toUpperCase()}</div><div><strong>{item.publisher}</strong><p>{item.quote}</p><small>Open source <Icon name="external" size={11}/></small></div></a>)}</section></div>
+              <div className="assessment-strip"><div><small>Proposed relationship</small><strong>{pretty(candidate.proposed_match_type)}</strong></div><div><small>Visual signal</small><strong>{Math.round(candidate.visual_score * 100)}%</strong><span>Discovery aid</span></div><div><small>Source quality</small><strong className={`grade grade-${candidate.source_grade}`}>Grade {candidate.source_grade}</strong><span>{candidate.evidence[0]?.publisher}</span></div><div><small>Image rights</small><strong>{pretty(candidate.rights_status)}</strong></div></div>
+              <div className="evidence-grid"><section className="evidence-card"><div className="section-title"><div><small>Editorial verification</small><h3>The confidence file</h3></div><span>{candidate.checks.contradictions?.length ? "Review conflict" : candidate.checks.editor_verified ? "Editor verified" : "Verification pending"}</span></div><ul className="checks"><li className={!candidate.checks.same_photo ? "pass" : "fail"}><span><Icon name={!candidate.checks.same_photo ? "check" : "close"}/></span><div><strong>Original image check</strong><small>{candidate.checks.same_photo ? "Image hash indicates a duplicate" : "No duplicate flagged; confirm the photograph"}</small></div></li><li className={!candidate.checks.same_event ? "pass" : "fail"}><span><Icon name={!candidate.checks.same_event ? "check" : "close"}/></span><div><strong>Appearance check</strong><small>{candidate.checks.same_event ? "The same event and date were detected" : "Confirm this is a distinct earlier appearance"}</small></div></li><li className={candidate.checks.identity ? "pass" : "warn"}><span><Icon name={candidate.checks.identity ? "check" : "search"}/></span><div><strong>Garment identity</strong><small>{candidate.checks.identity ? `Aligned: ${candidate.checks.landmarks?.join(", ")}` : "Stronger source support is still needed"}</small></div></li></ul></section><section className="source-card"><div className="section-title"><div><small>Provenance</small><h3>Source notes</h3></div><span className={`grade grade-${candidate.source_grade}`}>{candidate.source_grade}</span></div>{candidate.evidence.map((item, index) => <a href={item.url} target="_blank" rel="noreferrer" className="evidence-source" key={index}><div className="source-monogram">{item.publisher.slice(0, 2).toUpperCase()}</div><div><strong>{item.publisher}</strong><p>{item.quote}</p><small>Open source <Icon name="external" size={11}/></small></div></a>)}</section></div>
               <div className="action-bar"><div><small>Editor’s verdict</small><strong>{candidate.decision ? pretty(candidate.decision.decision) : "Awaiting your decision"}</strong></div><button type="button" className="ghost" onClick={() => void queueResearch()} disabled={researchBusy}>{researchBusy ? "Queuing…" : "Research more"}</button><button type="button" className="ghost" onClick={() => setDecisionMode("similar_not_same")}>Not the same</button><button type="button" className="reject" onClick={() => setDecisionMode("rejected")}><Icon name="close"/>Reject</button><button type="button" className="approve" onClick={() => setDecisionMode("approved")}><Icon name="check"/>Approve story</button>{candidate.decision?.decision === "approved" && <button type="button" className="download" onClick={() => void generateCollage()} disabled={collageBusy}><Icon name={collageBusy ? "refresh" : "image"}/>{collageBusy ? "Rendering…" : "Preview collage"}</button>}</div>
             </>}
           </>}
@@ -1321,17 +1413,19 @@ export default function DashboardPage() {
       <details className="manual-reddit-intake"><summary><span>Manual Reddit intake</span><small>Use when automated media extraction is unavailable</small></summary><form onSubmit={submitIntake}><label>Reddit permalink<input required name="reddit_url" type="url" placeholder="https://www.reddit.com/r/BollywoodFashion/comments/…"/></label><label>Post title<input required name="title" placeholder="Celebrity in Designer at Event"/></label><div className="form-row"><label>Celebrity<input name="celebrity" placeholder="Unresolved"/></label><label>Designer<input name="designer" placeholder="Unresolved"/></label></div><label>Event<input name="event_name" placeholder="Unresolved"/></label><label>Description<textarea name="body" placeholder="Paste the source description or add editor notes…"/></label><footer><button className="ghost" type="submit">Create context-review case</button></footer></form></details>
     </section></div>}
 
-    {showCollageEditor && selected && <div className="modal-backdrop collage-editor-backdrop" onMouseDown={() => !editorBusy && setShowCollageEditor(false)}><section className="collage-editor-modal" role="dialog" aria-modal="true" aria-labelledby="collage-editor-title" onMouseDown={event => event.stopPropagation()}>
-      <header><div><small>Collage workspace</small><h2 id="collage-editor-title">Edit this collage.</h2><p>Reorder, replace, resize, or crop each image, then review its fashion-archive history and source rights in the same panel.</p></div><button type="button" className="modal-close" onClick={() => setShowCollageEditor(false)} disabled={editorBusy} aria-label="Close collage editor"><Icon name="close"/></button></header>
+    {showCollageEditor && selected && <div className="modal-backdrop collage-editor-backdrop" onMouseDown={closeCollageEditor}><section className="collage-editor-modal" role="dialog" aria-modal="true" aria-labelledby="collage-editor-title" onMouseDown={event => event.stopPropagation()}>
+      <header><div><small>Collage workspace</small><h2 id="collage-editor-title">Edit this collage.</h2><p>Reorder, replace, resize, or crop each image, then review its fashion-archive history and source rights in the same panel.</p></div><button type="button" className="modal-close" onClick={closeCollageEditor} disabled={editorBusy} aria-label="Close collage editor"><Icon name="close"/></button></header>
       <div className="collage-editor-summary"><span><b>{editorSelectedPanels.length}</b> selected panels</span><span><Icon name="image" size={13}/>{editorCanvasFormat === "instagram_portrait" ? "Instagram portrait · 4:5" : "Instagram landscape · 1.91:1"}</span><span>{LAYOUT_TEMPLATES.find(item => item.id === editorLayoutTemplate)?.label}</span><span>{editorWatermark?.enabled ? "HHC watermark ready" : "Watermark optional"}</span></div>
-      <div className="collage-editor-body">
-        <section className="selected-panel-list"><div className="editor-section-heading"><div><small>Final image order</small><h3>Panels in collage</h3></div><button type="button" onClick={resetCollageLayout}>Reset automatic layout</button></div>
+      <div className="studio-history-bar" inert={editorBusy}><button type="button" onClick={undoHistory.undo} disabled={!undoHistory.canUndo || editorBusy}>↶ Undo</button><button type="button" onClick={undoHistory.redo} disabled={!undoHistory.canRedo || editorBusy}>↷ Redo</button><span>{editorDirty ? "Unsaved changes" : "Saved version"} · Ctrl / ⌘ Z to undo</span></div>
+      <div className="collage-editor-body" inert={editorBusy} tabIndex={0} role="region" aria-label="Collage editing workspace">
+        <section className="selected-panel-list" tabIndex={0} aria-label="Selected collage photos"><div className="editor-section-heading"><div><small>Final image order</small><h3>Panels in collage</h3></div><button type="button" onClick={resetCollageLayout}>Reset automatic layout</button></div>
           <CollageLayoutPicker panels={editorSelectedPanels} canvasFormat={editorCanvasFormat} layoutTemplate={editorLayoutTemplate} onFormatChange={setEditorCanvasFormat} onTemplateChange={setEditorLayoutTemplate}/>
+          <label className="panel-range"><span>Export resolution</span><select value={editorExportScale} onChange={event => setEditorExportScale(Number(event.target.value))}><option value={1}>Standard · 1080 px wide</option><option value={2}>High resolution · 2160 px wide</option><option value={3}>Large editorial · 3240 px wide</option></select><p className="edition-hint">Original photos are preserved. Larger exports cannot recover detail missing from a source image.</p></label>
           <div className="panel-sort-list">{editorSelectedPanels.map((panel, index) => {
             const requiredCurrent = ["current_primary", "current_angle"].includes(panel.role) && selectedCurrentPanelCount === 1;
             const option = panelOption(panel.id);
             const tuning = tuningPanelId === panel.id;
-            return <article className={`panel-sort-card ${tuning ? "is-tuning" : ""}`} key={panel.id}>
+            return <article className={`panel-sort-card ${tuning ? "is-tuning" : ""}`} key={panel.id} draggable={!tuning} onDragStart={event => event.dataTransfer.setData("text/plain", panel.id)} onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); const dragged = event.dataTransfer.getData("text/plain"); if (!editorPanelIds.includes(dragged) || dragged === panel.id) return; setEditorPanelIds(ids => { const next = ids.filter(id => id !== dragged); next.splice(next.indexOf(panel.id), 0, dragged); return next; }); }}>
               <span className="panel-order">{(index + 1).toString().padStart(2, "0")}</span>
               <img src={asset(panel.image_path)} alt={panel.label} style={{ objectFit: option.crop_mode === "crop" ? "cover" : "contain", objectPosition: `${option.focal_x * 100}% ${option.focal_y * 100}%` }}/>
               <div><small>{pretty(panel.role)}</small><strong>{panel.person || panel.label}</strong><p>{panel.label} · Grade {panel.source_grade}</p></div>
@@ -1342,15 +1436,19 @@ export default function DashboardPage() {
                 <button type="button" className="remove" onClick={() => { setEditorPanelIds(current => current.filter(id => id !== panel.id)); setEditorPanelOptions(current => { const next = { ...current }; delete next[panel.id]; return next; }); if (tuning) setTuningPanelId(null); }} disabled={requiredCurrent || editorSelectedPanels.length === 1} aria-label={`Remove ${panel.label}`} title={requiredCurrent ? "Keep at least one current source image" : "Remove panel"}><Icon name="trash" size={15}/></button>
               </div>
               {tuning && <div className="panel-tuning">
+                <div className="studio-image-tools"><button type="button" onClick={() => updatePanelOption(panel.id, { rotation_degrees: (((option.rotation_degrees || 0) + 90) % 360) as 0 | 90 | 180 | 270 })}>Rotate 90° · {option.rotation_degrees || 0}°</button><button type="button" aria-pressed={Boolean(option.flip_horizontal)} onClick={() => updatePanelOption(panel.id, { flip_horizontal: !option.flip_horizontal })}>Mirror horizontally</button><button type="button" aria-pressed={Boolean(option.flip_vertical)} onClick={() => updatePanelOption(panel.id, { flip_vertical: !option.flip_vertical })}>Mirror vertically</button></div>
+                <label className="panel-range"><span>Photo caption / designer credit</span><input value={option.caption || ""} maxLength={160} placeholder="Name · Designer · Event" onChange={event => updatePanelOption(panel.id, { caption: event.target.value })}/></label>
+                <ImageAdjustmentControls value={option.adjustments || DEFAULT_IMAGE_ADJUSTMENTS} onChange={adjustments => updatePanelOption(panel.id, { adjustments })}/>
+                <p className="edition-hint">Photos fill each panel without gaps or blurred backgrounds. Optional captions appear over the photo. Use manual crop to select the area you want to keep.</p>
                 <div className="panel-tuning-heading"><div><small>Image layout</small><strong>Resize &amp; crop</strong></div><button type="button" onClick={() => updatePanelOption(panel.id, DEFAULT_PANEL_OPTION)}>Reset image</button></div>
                 <label className="panel-range"><span>Panel width <b>{Math.round(option.width_scale * 100)}%</b></span><input type="range" min="65" max="175" step="5" value={Math.round(option.width_scale * 100)} onChange={event => updatePanelOption(panel.id, { width_scale: Number(event.target.value) / 100 })}/><small>Narrower</small><small>Wider</small></label>
-                <div className="crop-mode-control"><span>Image treatment</span><div><button type="button" className={option.crop_mode === "fit" ? "active" : ""} onClick={() => updatePanelOption(panel.id, { crop_mode: "fit", zoom: 1 })}>Show full image</button><button type="button" className={option.crop_mode === "crop" ? "active" : ""} onClick={() => updatePanelOption(panel.id, { crop_mode: "crop", crop_rect: option.crop_rect || { ...DEFAULT_CROP_RECT } })}>Manual crop</button></div><p>{option.crop_mode === "fit" ? "The complete photo stays visible; a soft background fills extra space." : "Draw and resize a freeform box to remove page text, banners, products, or any other unwanted area."}</p></div>
+                <div className="crop-mode-control"><span>Image treatment</span><div><button type="button" className={option.crop_mode === "fit" ? "active" : ""} onClick={() => updatePanelOption(panel.id, { crop_mode: "fit", zoom: 1 })}>Fill panel</button><button type="button" className={option.crop_mode === "crop" ? "active" : ""} onClick={() => updatePanelOption(panel.id, { crop_mode: "crop", crop_rect: option.crop_rect || { ...DEFAULT_CROP_RECT } })}>Manual crop</button></div><p>{option.crop_mode === "fit" ? "The photo fills the panel edge to edge. Edges may be cropped to match your chosen layout." : "Select the area to keep. That selection fills the panel; its edges may be cropped to match the layout."}</p></div>
                 {option.crop_mode === "crop" && <ManualCropEditor image={asset(panel.image_path)} label={panel.label} option={option} onChange={patch => updatePanelOption(panel.id, patch)}/>} 
               </div>}
             </article>;
           })}</div>
         </section>
-        <aside className="available-panel-list"><div className="editor-section-heading"><div><small>Replacement library</small><h3>Available images</h3></div><span>{editorAvailablePanels.length}</span></div>
+        <aside className="available-panel-list" tabIndex={0} aria-label="Available images and collage tools"><div className="editor-section-heading"><div><small>Replacement library</small><h3>Available images</h3></div><span>{editorAvailablePanels.length}</span></div>
           <CollageArchiveRights selected={selected}/>
           <CollageAdjustmentEditor
             baseImage={asset(selected.latest_collage?.source_preview_url || selected.latest_collage?.base_preview_url || selected.latest_collage?.preview_url || "")}
@@ -1379,7 +1477,7 @@ export default function DashboardPage() {
           {editorAvailablePanels.length ? <div className="available-panel-grid">{editorAvailablePanels.map(panel => <article key={panel.id}><img src={asset(panel.image_path)} alt={panel.label}/><div><small>{pretty(panel.role)}</small><strong>{panel.person || panel.label}</strong><p>{panel.publisher}</p><button type="button" onClick={() => setEditorPanelIds(current => [...current, panel.id])}><Icon name="plus" size={13}/>Add to collage</button></div></article>)}</div> : <div className="all-panels-used"><Icon name="check"/><strong>All available images are selected.</strong><span>Remove a panel to swap it for another source image.</span></div>}
         </aside>
       </div>
-      <footer><div><Icon name="shield"/><span>This saves a new draft and audit entry. It does not publish to WordPress.</span></div><div><button type="button" className="ghost" onClick={() => setShowCollageEditor(false)} disabled={editorBusy}>Cancel</button><button type="button" className="download" onClick={() => void saveCollageEdit()} disabled={editorBusy || !editorPanelIds.length}><Icon name={editorBusy ? "refresh" : "image"}/>{editorBusy ? "Rendering…" : "Save & re-render"}</button></div></footer>
+      <footer><div><Icon name="shield"/><span>This saves a new draft and audit entry. It does not publish to WordPress.</span></div><div><button type="button" className="ghost" onClick={closeCollageEditor} disabled={editorBusy}>Cancel</button><button type="button" className="download" onClick={() => void saveCollageEdit()} disabled={editorBusy || !editorPanelIds.length}><Icon name={editorBusy ? "refresh" : "image"}/>{editorBusy ? "Rendering…" : "Save & re-render"}</button></div></footer>
     </section></div>}
 
     {collageResult && <div className="modal-backdrop collage-backdrop" onMouseDown={() => setCollageResult(null)}><section className="collage-result-modal" onMouseDown={event => event.stopPropagation()}><header><div><small>Render complete</small><h2>Your outfit collage is ready.</h2><p>{collageResult.assetCount} source-backed images{collageResult.canvasFormat ? ` · ${collageResult.canvasFormat === "instagram_portrait" ? "Instagram portrait" : "Instagram landscape"} · ${pretty(collageResult.layoutTemplate || "balanced_grid")}` : ""}, with saved crops, manifest and evidence bundle.</p></div><button type="button" className="modal-close" onClick={() => setCollageResult(null)} aria-label="Close"><Icon name="close"/></button></header><div className={`collage-result-frame ${collageResult.canvasFormat === "instagram_landscape" ? "is-landscape" : ""}`}><img src={collageResult.previewUrl} alt="Generated outfit collage preview"/></div><footer><span><Icon name="check"/>Saved layout applied · originals untouched</span><div><a className="ghost" href={collageResult.bundleUrl} target="_blank" rel="noreferrer"><Icon name="download"/>Evidence bundle</a><a className="download" href={collageResult.previewUrl} target="_blank" rel="noreferrer"><Icon name="external"/>Open full size</a></div></footer></section></div>}

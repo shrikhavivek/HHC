@@ -279,6 +279,11 @@ def test_panel_width_and_focal_crop_are_applied_and_recorded(tmp_path):
         "focal_y": 0.5,
         "zoom": 2.0,
         "crop_rect": None,
+        "rotation_degrees": 0,
+        "flip_horizontal": False,
+        "flip_vertical": False,
+        "caption": "",
+        "adjustments": {"brightness": 1.0, "contrast": 1.0, "saturation": 1.0, "grayscale": 0.0},
     }
     with Image.open(tmp_path / "output" / "case-case-1" / "collage.png") as collage:
         # The narrowed first panel ends well before the midpoint, and its

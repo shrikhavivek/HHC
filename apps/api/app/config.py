@@ -3,6 +3,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    app_env: str = "development"
     database_url: str = "sqlite:///./outfit-research.db"
     editor_api_key: str = "local-editor-key"
     cors_origins: str = "http://localhost:3000"
@@ -31,6 +32,12 @@ class Settings(BaseSettings):
     daily_designer_search_budget: int = 8
     daily_automation_hour_utc: int = 3
     daily_automation_minute_utc: int = 30
+    scheduler_in_api: bool = True
+    instagram_access_token: str = ""
+    instagram_account_id: str = ""
+    instagram_watch_accounts: str = ""
+    meta_graph_version: str = "v23.0"
+    wordpress_site_url: str = "https://www.highheelconfidential.com"
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
@@ -39,8 +46,17 @@ def get_settings() -> Settings:
     settings = Settings()
     if settings.auto_approve:
         raise RuntimeError("AUTO_APPROVE must remain false in V1")
-    if settings.wordpress_publisher_enabled:
-        raise RuntimeError("WordPress publishing is disabled in V1")
+    if settings.app_env == "production":
+        if len(settings.editor_api_key) < 32 or settings.editor_api_key.startswith(("local-", "replace-")):
+            raise RuntimeError("Production requires a random EDITOR_API_KEY of at least 32 characters")
+        if settings.reddit_source_mode != "manual" and not settings.reddit_client_id:
+            raise RuntimeError("Production Reddit intake requires approved OAuth credentials")
+        if settings.database_url.startswith("sqlite"):
+            raise RuntimeError("Production requires PostgreSQL")
+        if "change-me" in settings.database_url:
+            raise RuntimeError("Replace the demonstration database password before production")
+    if not 0 <= settings.daily_automation_hour_utc <= 23 or not 0 <= settings.daily_automation_minute_utc <= 59:
+        raise RuntimeError("Daily automation time must be a valid UTC hour and minute")
     if bool(settings.reddit_client_id.strip()) != bool(settings.reddit_client_secret.strip()):
         raise RuntimeError("REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET must be configured together")
     return settings

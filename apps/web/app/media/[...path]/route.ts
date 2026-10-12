@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { authenticatedSession } from "@/lib/session";
 
 type Context = { params: Promise<{ path: string[] }> };
 
@@ -12,6 +13,7 @@ const CONTENT_TYPES: Record<string, string> = {
 };
 
 export async function GET(_request: NextRequest, context: Context) {
+  if (!await authenticatedSession(_request)) return NextResponse.json({ detail: "Sign in to view this image" }, { status: 401 });
   const { path } = await context.params;
   if (!path.length || !["static", "outputs", "media-files"].includes(path[0]) || path.some(part => !part || part === "." || part === "..")) {
     return NextResponse.json({ detail: "Media path not allowed" }, { status: 404 });
@@ -21,7 +23,7 @@ export async function GET(_request: NextRequest, context: Context) {
   const target = new URL(`/${path.map(encodeURIComponent).join("/")}`, base);
   let response: Response;
   try {
-    response = await fetch(target, { cache: "no-store", signal: AbortSignal.timeout(15000) });
+    response = await fetch(target, { headers: { "X-Editor-Key": process.env.EDITOR_API_KEY || "local-editor-key" }, cache: "no-store", redirect: "error", signal: AbortSignal.timeout(15000) });
   } catch {
     return NextResponse.json({ detail: "Media service unavailable" }, { status: 502 });
   }
@@ -36,7 +38,7 @@ export async function GET(_request: NextRequest, context: Context) {
     status: 200,
     headers: {
       "Content-Type": contentType,
-      "Cache-Control": ["static", "media-files"].includes(path[0]) ? "public, max-age=3600" : "no-store",
+      "Cache-Control": "private, no-store",
       "Content-Disposition": "inline",
       "X-Content-Type-Options": "nosniff",
     },

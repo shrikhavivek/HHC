@@ -10,3 +10,6 @@ data/
 outputs/
 trial-output/
 *.log
+*.tsbuildinfo
+test-results/
+playwright-report/

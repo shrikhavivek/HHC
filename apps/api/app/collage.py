@@ -1,12 +1,15 @@
 import json
 import math
 import zipfile
+import uuid
+import shutil
 from pathlib import Path
 from typing import Sequence
 
-from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps
+from PIL import Image, ImageDraw, ImageEnhance, ImageFont, ImageOps
 
 from .assets import build_render_assets
+from .photo_controls import prepare_photo, caption_panel
 
 
 PALETTES = [
@@ -300,6 +303,11 @@ def _normalized_panel_options(assets: list[dict], raw_options: dict | None) -> d
             "focal_y": round(_bounded_float(raw.get("focal_y"), 0.5, 0.0, 1.0), 3),
             "zoom": round(_bounded_float(raw.get("zoom"), 1.0, 1.0, 2.5), 2),
             "crop_rect": _normalized_crop_rect(raw.get("crop_rect")),
+            "rotation_degrees": raw.get("rotation_degrees", 0) if raw.get("rotation_degrees", 0) in {0, 90, 180, 270} else 0,
+            "flip_horizontal": bool(raw.get("flip_horizontal", False)),
+            "flip_vertical": bool(raw.get("flip_vertical", False)),
+            "caption": str(raw.get("caption") or "")[:160],
+            "adjustments": _normalized_image_adjustments(raw.get("adjustments")),
         }
     return normalized
 
@@ -480,21 +488,13 @@ def _crop_panel(image: Image.Image, size: tuple[int, int], option: dict) -> Imag
 
 
 def _fit_panel(image: Image.Image, size: tuple[int, int], option: dict) -> Image.Image:
-    """Keep the full image visible while filling the resized panel with itself."""
-    background = ImageOps.fit(
+    """Fill the cell edge to edge, without letterboxing or synthetic backgrounds."""
+    return ImageOps.fit(
         image,
         size,
         method=Image.Resampling.LANCZOS,
         centering=(option["focal_x"], option["focal_y"]),
     )
-    background = ImageEnhance.Brightness(background).enhance(0.52)
-    background = background.filter(ImageFilter.GaussianBlur(radius=max(8, min(size) // 35)))
-    foreground = ImageOps.contain(image, size, method=Image.Resampling.LANCZOS)
-    x = (size[0] - foreground.width) // 2
-    y = (size[1] - foreground.height) // 2
-    background.paste(foreground, (x, y))
-    foreground.close()
-    return background
 
 
 def _instagram_panel(image: Image.Image, size: tuple[int, int], option: dict) -> Image.Image:
@@ -525,8 +525,10 @@ def render_bundle(
     watermark_options: dict | None = None,
     canvas_format: str | None = None,
     layout_template: str | None = None,
+    export_scale: int = 1,
 ):
-    bundle_dir = Path(output_root) / f"case-{case.id}"
+    case_dir = Path(output_root) / f"case-{case.id}"
+    bundle_dir = case_dir / "versions" / uuid.uuid4().hex
     bundle_dir.mkdir(parents=True, exist_ok=True)
 
     assets = build_render_assets(
@@ -538,6 +540,7 @@ def render_bundle(
     if not assets:
         raise ValueError("At least one source-backed image is required")
     normalized_options = _normalized_panel_options(assets, panel_options)
+    render_options = {}
 
     normalized_format = canvas_format if canvas_format in INSTAGRAM_CANVAS_FORMATS else None
     normalized_template = layout_template if layout_template in COLLAGE_LAYOUT_TEMPLATES else "balanced_grid"
@@ -545,13 +548,18 @@ def render_bundle(
     try:
         for asset in assets:
             source = _open_local_asset(static_dir, asset["image_path"], media_dir)
-            opened.append(ImageOps.exif_transpose(source).convert("RGB"))
+            original = ImageOps.exif_transpose(source).convert("RGB")
+            photo, render_option = prepare_photo(original, normalized_options[str(asset["id"])], normalized_options[str(asset["id"])]["adjustments"])
+            original.close()
+            opened.append(photo)
+            render_options[str(asset["id"])] = render_option
             source.close()
         width_scales = [normalized_options[str(asset["id"])]["width_scale"] for asset in assets]
         if normalized_format:
             format_spec = INSTAGRAM_CANVAS_FORMATS[normalized_format]
-            canvas_width = int(format_spec["width"])
-            canvas_height = int(format_spec["height"])
+            scale = export_scale if export_scale in {1, 2, 3} else 1
+            canvas_width = int(format_spec["width"]) * scale
+            canvas_height = int(format_spec["height"]) * scale
             cells = _instagram_geometry(
                 len(assets),
                 canvas_width,
@@ -562,15 +570,16 @@ def render_bundle(
             )
             canvas = Image.new("RGB", (canvas_width, canvas_height))
             for image_index, (x, y, width, height) in enumerate(cells):
-                option = normalized_options[str(assets[image_index]["id"])]
+                option = render_options[str(assets[image_index]["id"])]
                 panel = _instagram_panel(opened[image_index], (width, height), option)
+                panel = caption_panel(panel, normalized_options[str(assets[image_index]["id"])]["caption"])
                 canvas.paste(panel, (x, y))
                 panel.close()
         else:
             canvas_width = 1200 if len(assets) == 1 else 1800 if len(assets) <= 12 else 2200
             aspect_ratios = []
             for image, asset in zip(opened, assets):
-                option = normalized_options[str(asset["id"])]
+                option = render_options[str(asset["id"])]
                 rect = option["crop_rect"] if option["crop_mode"] == "crop" else None
                 if rect:
                     aspect_ratios.append((image.width * rect["width"]) / max(1, image.height * rect["height"]))
@@ -585,7 +594,7 @@ def render_bundle(
                 x = 0
                 for width, height in row:
                     source = opened[image_index]
-                    option = normalized_options[str(assets[image_index]["id"])]
+                    option = render_options[str(assets[image_index]["id"])]
                     if option["crop_mode"] == "crop" and option["crop_rect"]:
                         selection = _crop_rectangle(source, option["crop_rect"])
                         if option["width_scale"] != 1.0:
@@ -599,6 +608,7 @@ def render_bundle(
                         panel = _fit_panel(source, (width, height), option)
                     else:
                         panel = source.resize((width, height), Image.Resampling.LANCZOS)
+                    panel = caption_panel(panel, normalized_options[str(assets[image_index]["id"])]["caption"])
                     canvas.paste(panel, (x, y))
                     panel.close()
                     x += width
@@ -632,6 +642,7 @@ def render_bundle(
         "layout": normalized_template if normalized_format else "edge_to_edge_justified",
         "canvas_format": normalized_format or "source_ratio",
         "canvas_width": canvas.width,
+        "export_scale": export_scale,
         "canvas_height": canvas.height,
         "canvas_ratio": INSTAGRAM_CANVAS_FORMATS[normalized_format]["ratio"] if normalized_format else "source-driven",
         "editor_customized": panel_ids is not None,
@@ -643,6 +654,7 @@ def render_bundle(
         "base_preview_file": base_webp_path.name,
         "spacing_px": 0,
         "border_px": 0,
+        "renderer_style": "edge_to_edge_v2",
     }
     manifest_path = bundle_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
@@ -715,4 +727,10 @@ def render_bundle(
     if rendered_canvas is not canvas:
         rendered_canvas.close()
     canvas.close()
+    # Compatibility previews remain available; the database always references
+    # immutable version files so later renders cannot rewrite editorial history.
+    for source in bundle_dir.iterdir():
+        temporary = case_dir / f".{uuid.uuid4().hex}.tmp"
+        shutil.copyfile(source, temporary)
+        temporary.replace(case_dir / source.name)
     return str(webp_path), str(manifest_path), str(zip_path)

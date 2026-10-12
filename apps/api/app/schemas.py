@@ -61,6 +61,11 @@ class PanelLayoutOption(BaseModel):
     focal_y: float = Field(default=0.5, ge=0, le=1)
     zoom: float = Field(default=1.0, ge=1, le=2.5)
     crop_rect: CropRectangle | None = None
+    rotation_degrees: Literal[0, 90, 180, 270] = 0
+    flip_horizontal: bool = False
+    flip_vertical: bool = False
+    caption: str = Field(default="", max_length=160)
+    adjustments: "ImageAdjustments" = Field(default_factory=lambda: ImageAdjustments())
 
 
 class ImageAdjustments(BaseModel):
@@ -82,6 +87,8 @@ class WatermarkLayout(BaseModel):
 
 
 class CollageEditInput(BaseModel):
+    export_scale: Literal[1, 2, 3] = 1
+    expected_revision: int | None = Field(default=None, ge=0)
     panel_ids: list[str] = Field(min_length=1, max_length=24)
     panel_options: dict[str, PanelLayoutOption] = Field(default_factory=dict)
     canvas_format: Literal["instagram_portrait", "instagram_landscape"] = "instagram_portrait"

@@ -150,14 +150,12 @@ def _reddit_oauth_configured(client_id: str = "", client_secret: str = "") -> bo
 
 
 def _retry_delay(response: requests.Response, attempt: int) -> float:
-    """Return a bounded delay using Reddit's rate-limit response headers."""
-    for header in ("Retry-After", "X-Ratelimit-Reset"):
-        value = response.headers.get(header, "")
-        try:
-            return min(30.0, max(1.0, float(value)))
-        except (TypeError, ValueError):
-            continue
-    return min(30.0, 2.5 * (attempt + 1))
+    """Defer long waits instead of shortening an upstream retry window."""
+    from .providers import retry_seconds
+    delay = retry_seconds(response.headers, default=2.5 * (attempt + 1))
+    if delay > 30:
+        raise AutomationError(f"Reddit requested a cooldown of {int(delay)} seconds; retry later")
+    return delay
 
 
 def _clear_reddit_oauth_token_cache(client_id: str | None = None) -> None:
@@ -184,13 +182,28 @@ def _reddit_oauth_token(client_id: str, client_secret: str, user_agent: str) -> 
         last_error: Exception | None = None
         for attempt in range(3):
             try:
+                from .config import get_settings
+                from .providers import before_request, observe_response, ProviderDeferred
+                managed = get_settings().reddit_source_mode != "manual"
+                provider = f"reddit-auth:{client_id}"
+                if managed:
+                    try:
+                        before_request(provider, spacing=2.0)
+                    except ProviderDeferred as exc:
+                        raise AutomationError(str(exc)) from None
                 response = requests.post(
                     _REDDIT_OAUTH_TOKEN_URL,
                     auth=(client_id, client_secret),
                     data={"grant_type": "client_credentials"},
                     headers={"User-Agent": user_agent, "Accept": "application/json"},
                     timeout=20,
+                    allow_redirects=False,
                 )
+                if managed:
+                    try:
+                        observe_response(provider, response)
+                    except ProviderDeferred as exc:
+                        raise AutomationError(str(exc)) from None
                 if response.status_code == 429 and attempt < 2:
                     time.sleep(_retry_delay(response, attempt))
                     continue
@@ -225,8 +238,21 @@ def _reddit_oauth_request(
 ) -> requests.Response:
     """Make an authenticated Reddit API request with token refresh and backoff."""
     url = f"{_REDDIT_OAUTH_API_URL}/{path.lstrip('/')}"
+    from .config import get_settings
+    from .providers import before_request, observe_response, ProviderDeferred, cache_key, cached_response, cache_response
+    managed = get_settings().reddit_source_mode != "manual"
+    provider = f"reddit:{client_id}"
+    request_key = cache_key(client_id, path, parameters)
+    cached = cached_response(request_key) if managed else None
+    if cached is not None:
+        return cached
     last_error: Exception | None = None
     for attempt in range(3):
+        if managed:
+            try:
+                before_request(provider)
+            except ProviderDeferred as exc:
+                raise AutomationError(str(exc)) from None
         token = _reddit_oauth_token(client_id, client_secret, user_agent)
         try:
             response = requests.get(
@@ -239,6 +265,11 @@ def _reddit_oauth_request(
                 },
                 timeout=20,
             )
+            if managed:
+                try:
+                    observe_response(provider, response)
+                except ProviderDeferred as exc:
+                    raise AutomationError(str(exc)) from None
             if response.status_code == 401 and attempt < 2:
                 _clear_reddit_oauth_token_cache(client_id)
                 continue
@@ -246,6 +277,8 @@ def _reddit_oauth_request(
                 time.sleep(_retry_delay(response, attempt))
                 continue
             response.raise_for_status()
+            if managed:
+                cache_response(request_key, response)
             return response
         except requests.RequestException as exc:
             last_error = exc
@@ -272,11 +305,7 @@ def _request(
                 timeout=20,
             )
             if response.status_code == 429 and attempt < 2:
-                retry_after = response.headers.get("Retry-After", "")
-                try:
-                    delay = min(30.0, max(2.0, float(retry_after)))
-                except ValueError:
-                    delay = 2.5 * (attempt + 1)
+                delay = _retry_delay(response, attempt)
                 time.sleep(delay)
                 continue
             response.raise_for_status()
@@ -982,6 +1011,8 @@ def parse_outfit(title: str, description: str) -> dict[str, str]:
 
 
 def _refresh_case_metadata(case: Case) -> dict[str, dict[str, str]]:
+    if (case.extraction or {}).get("context_verified"):
+        return {}
     """Repair unresolved metadata as parsing improves without overwriting edits."""
     parsed = parse_outfit(case.source_title, case.source_body)
     changes: dict[str, dict[str, str]] = {}
@@ -1064,21 +1095,19 @@ def _download_image(url: str, media_dir: str, user_agent: str, *, subfolder: str
         if _usable_image_file(existing):
             return f"/media-files/{subfolder}/{existing.name}"
     try:
-        response = requests.get(url, headers={"User-Agent": user_agent}, timeout=25)
-        response.raise_for_status()
-        if len(response.content) > 25 * 1024 * 1024:
-            return None
-        with Image.open(io.BytesIO(response.content)) as probe:
+        from .public_sources import _fetch_limited
+        _, content, _ = _fetch_limited(url, user_agent=user_agent, allowed_domains=None, source_document=False, maximum_bytes=25 * 1024 * 1024, accept="image/*")
+        with Image.open(io.BytesIO(content)) as probe:
             width, height = probe.size
             image_format = (probe.format or "JPEG").upper()
             probe.verify()
-        if width < MIN_SOURCE_IMAGE_EDGE or height < MIN_SOURCE_IMAGE_EDGE:
+        if width * height > 40_000_000 or width < MIN_SOURCE_IMAGE_EDGE or height < MIN_SOURCE_IMAGE_EDGE:
             return None
         extension = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp", "GIF": ".gif"}.get(image_format, ".jpg")
         destination = destination_dir / f"{digest}{extension}"
-        destination.write_bytes(response.content)
+        destination.write_bytes(content)
         return f"/media-files/{subfolder}/{destination.name}"
-    except (requests.RequestException, OSError, ValueError):
+    except (requests.RequestException, OSError, ValueError, Image.DecompressionBombError):
         return None
 
 
@@ -1377,6 +1406,9 @@ def _historical_matches(db: Session, case: Case, media_dir: str, limit: int = 3)
     current_tokens = _tokens(case)
     scored: list[tuple[Case, float, float, float, dict]] = []
     for prior in archive:
+        from .review import earlier_date
+        if not earlier_date(prior.event_date, case.event_date) or _same_file(case.base_image, prior.base_image, media_dir):
+            continue
         if not case_content_eligible(prior):
             continue
         if _canonical(prior.designer) != _canonical(case.designer):
@@ -1753,6 +1785,9 @@ def _remote_reddit_matches(db: Session, case: Case, settings, *, limit: int = 3)
             same_person=same_person,
         )
         published_date = post["published"].date().isoformat() if post["published"] else None
+        from .review import earlier_date
+        if not earlier_date(published_date, case.event_date):
+            continue
         same_event = (
             _canonical(case.event_name) not in UNKNOWN_VALUES
             and _canonical(case.event_name) == _canonical(outfit["event"])
@@ -1783,7 +1818,8 @@ def _remote_reddit_matches(db: Session, case: Case, settings, *, limit: int = 3)
                 "same_photo": False,
                 "same_event": same_event,
                 "chronology": True,
-                "identity": True,
+                "identity": False,
+                "editor_verified": False,
                 "contradictions": [],
                 "landmarks": ["same designer attribution", *assessment["landmarks"]],
                 "automation": {
@@ -1847,7 +1883,8 @@ def _add_matches(db: Session, case: Case, media_dir: str) -> list[Candidate]:
                 "same_photo": False,
                 "same_event": False,
                 "chronology": True,
-                "identity": True,
+                "identity": False,
+                "editor_verified": False,
                 "contradictions": [],
                 "landmarks": ["same designer attribution", *assessment["landmarks"]],
                 "automation": {
@@ -1926,7 +1963,7 @@ def _research_existing_case(db: Session, case: Case, settings, static_dir: str, 
     )
     if selected:
         best = max(selected, key=lambda item: item.visual_score)
-        case.match_type = best.proposed_match_type
+        case.match_type = best.proposed_match_type if best.status == "approved" else "unverified_outfit_lead"
         case.confidence = best.visual_score
     elif has_verified_reference:
         case.match_type = "exact_designer_reference"
@@ -2235,6 +2272,7 @@ def render_draft_collage(
         watermark_options=_saved_watermark(case),
         canvas_format=_saved_canvas_format(case),
         layout_template=_saved_layout_template(case),
+        export_scale=(case.extraction.get("collage_edit") or {}).get("export_scale", 1),
     )
     collage = Collage(case_id=case.id, decision_id=decision.id, image_path=image_path, manifest_path=manifest_path, bundle_path=bundle_path)
     db.add(collage)
@@ -2277,7 +2315,7 @@ def migrate_legacy_matcher_outputs(db: Session, settings, static_dir: str) -> in
             )
             if selected:
                 best = max(selected, key=lambda item: item.visual_score)
-                case.match_type = best.proposed_match_type
+                case.match_type = best.proposed_match_type if best.status == "approved" else "unverified_outfit_lead"
                 case.confidence = best.visual_score
             elif has_verified_reference:
                 case.match_type = "exact_designer_reference"
@@ -2328,6 +2366,9 @@ def run_daily_automation(
 ) -> dict:
     source_timezone = _source_timezone(settings.reddit_daily_timezone)
     selected_date = target_date or datetime.now(source_timezone).date()
+    if settings.reddit_source_mode == "rss":
+        # Explicit public-feed mode must not activate stale OAuth credentials.
+        settings = settings.model_copy(update={"reddit_client_id": "", "reddit_client_secret": ""})
     key = f"daily-reddit:{selected_date.isoformat()}:{trigger}"
     existing_run = db.scalar(select(JobRun).where(JobRun.idempotency_key == key))
     if existing_run and trigger == "scheduler" and existing_run.status == "completed":
@@ -2439,6 +2480,7 @@ def run_daily_automation(
                 continue
             published = post["published"]
             extraction = {
+                "published_at": published.isoformat() if published else None,
                 "automated": True,
                 "provider": feed_metadata["listing_provider"],
                 "author": post["author"],
@@ -2496,7 +2538,7 @@ def run_daily_automation(
             }
             if candidates:
                 best = max(candidates, key=lambda item: item.visual_score)
-                case.match_type = best.proposed_match_type
+                case.match_type = best.proposed_match_type if best.status == "approved" else "unverified_outfit_lead"
                 case.confidence = best.visual_score
             collage = _render_automatic_draft(db, case, candidates, settings, static_dir)
             panel_count = len(build_render_assets(case, candidates, include_automation_matches=True, panel_ids=_saved_panel_ids(case)))
@@ -2523,9 +2565,11 @@ def run_daily_automation(
         # Recheck source-only cases as the retained Reddit archive grows. A
         # successful search is cached in extraction JSON so ordinary reruns do
         # not hammer Reddit's anonymous search endpoint.
-        research_cases = db.scalars(
+        # Fast edition refreshes must finish both days' intake before optional
+        # remote archive research. Local comparisons still run during intake.
+        research_cases = [] if trigger == "refresh" else db.scalars(
             select(Case)
-            .where(Case.source_type == "reddit_rss", Case.demo_data.is_(False))
+            .where(Case.source_type == "reddit_rss", Case.demo_data.is_(False), Case.event_date == selected_date.isoformat())
             .options(selectinload(Case.candidates))
             .order_by(Case.created_at.asc())
         ).all()

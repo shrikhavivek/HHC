@@ -1,25 +1,29 @@
 import { NextRequest, NextResponse } from "next/server";
-import { SESSION_COOKIE, verifySession } from "@/lib/session";
-
+import { authenticatedSession, sameOrigin } from "@/lib/session";
 type Context = { params: Promise<{ path: string[] }> };
-
 async function proxy(request: NextRequest, context: Context) {
-  const session = verifySession(request.cookies.get(SESSION_COOKIE)?.value);
-  if (!session) return NextResponse.json({ detail: "WordPress authentication required" }, { status: 401 });
+  if (!["GET", "HEAD"].includes(request.method) && !sameOrigin(request)) return NextResponse.json({ detail: "Invalid origin" }, { status: 403 });
+  const session = await authenticatedSession(request);
+  if (!session) return NextResponse.json({ detail: "Please sign in again." }, { status: 401 });
   const { path } = await context.params;
-  const base = process.env.API_INTERNAL_URL || "http://localhost:8000";
-  const target = new URL(`/api/${path.join("/")}`, base);
-  request.nextUrl.searchParams.forEach((value, key) => target.searchParams.set(key, value));
-  const headers: HeadersInit = { "X-Editor-Key": process.env.EDITOR_API_KEY || "local-editor-key" };
-  const contentType = request.headers.get("content-type");
-  if (contentType) headers["Content-Type"] = contentType;
-  // Preserve multipart boundaries and binary image bytes for collage uploads.
-  // Reading a multipart request as text corrupts JPEG/WebP payloads.
-  const body = ["GET", "HEAD"].includes(request.method) ? undefined : await request.arrayBuffer();
-  const response = await fetch(target, { method: request.method, headers, body, cache: "no-store" });
-  const data = await response.arrayBuffer();
-  return new NextResponse(data, { status: response.status, headers: { "Content-Type": response.headers.get("content-type") || "application/json" } });
+  if (!path.length || path[0] === "internal" || path.some(part => !/^[a-zA-Z0-9_-]+$/.test(part))) return NextResponse.json({ detail: "Route unavailable" }, { status: 404 });
+  const target = new URL(`/api/${path.map(encodeURIComponent).join("/")}`, process.env.API_INTERNAL_URL || "http://localhost:8100");
+  target.search = request.nextUrl.search;
+  const headers: Record<string, string> = { "X-Editor-Key": process.env.EDITOR_API_KEY || "local-editor-key", "X-Editor-Id": encodeURIComponent(session.username) };
+  if (request.headers.get("content-type")) headers["Content-Type"] = request.headers.get("content-type")!;
+  if (path.includes("wordpress") && session.authorization && !session.demo) headers["X-WP-Authorization"] = session.authorization;
+  try {
+    const chunks: Uint8Array[] = []; let size = 0;
+    if (request.body) {
+      const reader = request.body.getReader();
+      while (true) { const { done, value } = await reader.read(); if (done) break; size += value.length; if (size > 24 * 1024 * 1024) { await reader.cancel(); return NextResponse.json({ detail: "Upload must be under 24 MB." }, { status: 413 }); } chunks.push(value); }
+    }
+    const body = chunks.length ? Buffer.concat(chunks) : undefined;
+    const response = await fetch(target, { method: request.method, headers, body, cache: "no-store", redirect: "error", signal: AbortSignal.timeout(180000) });
+    const responseHeaders: Record<string, string> = { "Content-Type": response.headers.get("content-type") || "application/json", "Cache-Control": "private, no-store" };
+    for (const name of ["content-disposition", "retry-after"]) if (response.headers.get(name)) responseHeaders[name] = response.headers.get(name)!;
+    return new NextResponse(response.body, { status: response.status, headers: responseHeaders });
+  } catch { return NextResponse.json({ detail: "The service could not complete this request. Refresh its status before retrying." }, { status: 502 }); }
 }
-
 export const GET = proxy;
 export const POST = proxy;

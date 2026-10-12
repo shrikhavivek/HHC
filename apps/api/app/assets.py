@@ -5,7 +5,7 @@ from typing import Any, Iterable, Sequence
 
 VALID_ASSET_ROLES = {"current_angle", "designer_reference", "editor_upload"}
 BLOCKED_RIGHTS_STATUSES = {"do_not_use", "blocked", "unknown_blocked"}
-CURRENT_MATCHER_VERSION = 4
+CURRENT_MATCHER_VERSION = 5
 
 
 def normalize_case_assets(case: Any) -> list[dict[str, Any]]:
@@ -57,6 +57,8 @@ def normalize_case_assets(case: Any) -> list[dict[str, Any]]:
 
 
 def _latest_approved(candidate: Any) -> bool:
+    if (getattr(candidate, "checks", {}) or {}).get("editor_verified") is False:
+        return False
     decisions = list(getattr(candidate, "decisions", []) or [])
     if not decisions:
         return False
@@ -155,6 +157,7 @@ def build_panel_catalog(
         panels.append(
             {
                 "id": candidate.id,
+                "editor_approved": _latest_approved(candidate),
                 "role": "historical_same_person" if candidate in same_person else "historical_other_person",
                 "label": "Earlier wear" if candidate in same_person else "Previously seen on",
                 "person": candidate.person,
@@ -185,7 +188,7 @@ def build_panel_catalog(
 def default_panel_ids(panels: Sequence[dict[str, Any]]) -> list[str]:
     """Choose the honest automatic treatment from an editor panel catalog."""
     current = [item for item in panels if item["role"] in {"current_primary", "current_angle"}]
-    historical = [item for item in panels if item["role"].startswith("historical_")]
+    historical = [item for item in panels if item["role"].startswith("historical_") and item.get("editor_approved")]
     references = [item for item in panels if item["role"] == "designer_reference"]
     selected = [*current, *historical]
     if not historical and references:

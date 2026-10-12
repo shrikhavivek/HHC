@@ -1,5 +1,9 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import "./editorial.css";
+import "./atelier.css";
+import "./collage-usability.css";
+export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   title: "High Heel Confidential — Outfit Research",

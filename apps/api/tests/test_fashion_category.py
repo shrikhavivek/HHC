@@ -53,3 +53,30 @@ def test_mixed_evidence_repairs_an_older_single_desk_label():
         extraction={"fashion_category": "men"},
     )
     assert case_fashion_category(case) == "mixed"
+
+
+def test_historical_comparison_does_not_mean_two_people_in_this_photo():
+    assert classify_fashion_category("Alia Bhatt", "Alia Bhatt in Gucci", "Ranveer Singh wore the same look last year.") == "women"
+    assert classify_fashion_category("Alia Bhatt", "Alia Bhatt in Ranveer Singh's jacket") == "women"
+
+
+def test_editor_confirmed_picture_category_takes_priority():
+    case = SimpleNamespace(celebrity="Alia Bhatt and Ranveer Singh", source_title="Promotions", source_body="", extraction={"fashion_category":"women", "fashion_category_source":"editor_confirmed"})
+    assert case_fashion_category(case) == "women"
+
+
+def test_title_subject_wins_over_other_people_in_gallery():
+    assert classify_fashion_category(
+        "Ananya Panday and Ranveer Singh", "Ananya Panday at the Chanel dinner",
+        "Ananya Panday and Ranveer Singh posed and were pictured together.",
+    ) == "women"
+    assert classify_fashion_category(
+        "Ranveer Singh and Alia Bhatt", "Ranveer Singh in Raghavendra Rathore",
+        "Ranveer Singh and Alia Bhatt attended together.",
+    ) == "men"
+
+
+def test_title_first_rule_repairs_old_automatic_mixed_label():
+    case = SimpleNamespace(celebrity="Shloka Ambani", source_title="Shloka Ambani in Abu Jani Sandeep Khosla",
+                           source_body="", extraction={"fashion_category": "mixed"})
+    assert case_fashion_category(case) == "women"

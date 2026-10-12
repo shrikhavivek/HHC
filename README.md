@@ -1,165 +1,193 @@
-# High Heel Confidential — Outfit Research System
+# High Heel Confidential — Editorial Studio
 
-An automated editorial research system for celebrity outfit-repeat stories.
-It ingests Reddit automatically, accepts editor-selected public social-post
-URLs, retains a searchable fashion archive, and renders editable draft collages.
+An editorial workspace for daily fashion intake, outfit research, reversible
+collage editing, and reviewed WordPress drafts. The browser never receives
+Reddit, Instagram or WordPress credentials in JavaScript.
 
-## Run
+## Run locally
 
-```powershell
-Copy-Item .env.example .env
-docker compose up --build
-```
-
-Open http://localhost:3100. API docs are at http://localhost:8100/docs.
-
-### Reddit OAuth (recommended)
-
-For dependable daily intake and archive search, register a Reddit Data API
-application under the Reddit account that owns this integration. Do not put the
-account password in this project. Add only the issued OAuth application
-credentials to `.env`:
+Keep your existing `.env`; copy `.env.example` only for a new installation.
+For a local demonstration, explicitly set:
 
 ```env
-REDDIT_CLIENT_ID=your-issued-client-id
-REDDIT_CLIENT_SECRET=your-issued-client-secret
-REDDIT_USER_AGENT=windows:hhc-outfit-research:v1.0 (by /u/your_reddit_username)
+APP_ENV=development
+APP_ORIGIN=http://localhost:3100
+DEMO_LOGIN_ENABLED=true
+DEMO_USERNAME=hhc-demo
+DEMO_PASSWORD=HHC-Demo-2026!
+REDDIT_SOURCE_MODE=manual
 ```
 
-Restart the API after changing `.env`:
+Then run:
 
 ```powershell
-docker compose up -d --build api
+docker compose up -d --build
 ```
 
-`GET http://localhost:8100/health` reports `reddit_authentication: oauth`
-when both credentials are loaded. OAuth mode uses Reddit's JSON API for daily
-listings, complete gallery metadata, and all-time archive searches. Tokens are
-kept in memory, refreshed automatically, and never returned to the browser.
-It processes up to `REDDIT_OAUTH_DAILY_SEARCH_BUDGET` archive searches per run
-(80 by default), while anonymous mode keeps the conservative
-`DAILY_REMOTE_SEARCH_BUDGET` limit.
-When credentials are absent, the application retains its anonymous RSS/JSON
-fallback for local demonstration, but that fallback can still be throttled.
+Open http://localhost:3100 and use the demonstration credentials above.
+Demo sign-in is disabled by default and always disabled in production.
+Demonstration cases use clearly identified placeholder images; they cannot
+be sent to WordPress. No live provider access is implied by demo data.
 
-For local testing, Docker enables a temporary demo login by default:
-`hhc-demo` / `HHC-Demo-2026!`. Set `DEMO_LOGIN_ENABLED=false` before sharing or
-deploying the application, then use the client WordPress Application Password.
+The stack contains PostgreSQL, the private API, the web application and a
+daily worker. A storage initialization service assigns only the media and
+output volumes to the application's non-root user; existing files are retained.
+API and web ports bind to localhost. API reads, documentation, originals and
+rendered images require authentication. The public `/health` route checks
+database connectivity.
 
-With `REDDIT_SOURCE_MODE=rss`, the first launch immediately processes every
-image post published that calendar day in `r/BollywoodFashion`. Intake follows
-Reddit listing pages until it crosses the day boundary; it is not capped at a
-fixed number of posts. The default source calendar is `Asia/Kolkata`, configured
-with `REDDIT_DAILY_TIMEZONE`. It then runs every day at the configured UTC time.
-The **Run daily automation** control is an optional run-now trigger; it is not a
-required editorial step. Repeated runs are idempotent, so the same Reddit post
-is not imported twice.
+## An editor's workflow
 
-Editors can also choose **Import post URL** and paste a public Instagram,
-Threads, Facebook, X, Pinterest, TikTok, YouTube, or Reddit post. The importer
-uses only title, caption, author, date, and images exposed by the public page;
-private or login-gated content is rejected. Optional celebrity, designer,
-event, title, and description hints can correct sparse source metadata. The
-result enters the same archive-search, matching, collage, rights, and editing
-workflow as an automated Reddit case. A source that exposes only its cover
-image creates a one-image draft; editors can then add properly credited images
-manually instead of the system inventing or scraping unrelated panels.
+1. Open **Sources & schedule** to see credentials, worker status, cooldowns
+   and recent runs. **Refresh now** queues work without blocking the page.
+2. Open a source case. Correct the person, designer, event or date when necessary.
+   Corrections invalidate prior match verification and story rights confirmation.
+3. Inspect historical leads against the original photos. Record the source,
+   garment details, distinct appearances and chronology before approving a match.
+4. Open **Edit collage & sources** to select the actual photos to use.
+5. Open **Write story**, write the headline and editorial text, add image
+   descriptions and photo credits, and choose WordPress categories and tags.
+6. Confirm the reviewed collage's attribution and usage rights, save the story,
+   then **Send WordPress draft**. Finish publication or scheduling in WordPress.
 
-For every eligible post, the runner:
+### Collage tools
 
-1. Downloads the highest-resolution Reddit-hosted source available.
-2. Uses title, description, gallery captions, social handles, and known aliases
-   to extract celebrity, designer, event, and Women/Men/Both classification.
-3. Searches the complete retained archive and up to 100 all-time Reddit search
-   results using title and description evidence; there is no age or year cutoff.
-   It then requires matching designer, garment category, construction landmarks,
-   and bounded image similarity. Explicit colour or garment conflicts reject a
-   candidate instead of forcing a comparison.
-4. Creates a multi-image collage when exact supporting sources qualify, or an
-   honest source-only editorial layout when no exact match exists.
-5. Stores a full-resolution WebP/PNG, source manifest, and ZIP evidence bundle.
+- Reorder with drag and drop or keyboard-accessible move buttons.
+- Add, remove and replace source photos; upload credited JPEG, PNG or WebP files.
+- Fit the full photograph or draw, move and resize a reversible crop.
+- Rotate in quarter turns; mirror horizontally or vertically.
+- Adjust brightness, contrast, saturation and grayscale per photo or across
+  the complete collage; apply and reset appearance presets.
+- Add a caption/designer credit in a separate strip beneath a photo.
+- Choose portrait/landscape and balanced-grid, hero or editorial-split layouts.
+- Export at 1080, 2160 or 3240 pixels wide. Enlarging cannot recover missing
+  source detail. Original images remain unchanged.
+- Upload an authorized watermark, then move, resize, rotate and change its
+  opacity and colour independently.
+- Undo/redo recent changes with buttons or Ctrl/Cmd Z, Shift Ctrl/Cmd Z or Ctrl Y.
+- Unsaved-change warnings, concurrent-edit checks, immutable render versions,
+  restore-as-new-draft, PNG/WebP outputs and a ZIP source manifest.
 
-Live media is stored in the persistent `media_data` Docker volume and generated
-bundles in `output_data`, so rebuilding containers does not remove them. Once
-live results exist, seeded visual placeholders are automatically excluded from
-the dashboard.
+New renders have unique version paths. Older, pre-upgrade render records may
+point to a single overwritten legacy file; that history cannot be reconstructed.
 
-Official designer-model references are also automatic when `SERPAPI_KEY` is
-configured. The provider first resolves the designer's official domain, then
-accepts only an exact-context image whose source page is on that domain. If the
-provider is absent or evidence is weak, the panel is omitted—never replaced by
-a stock image or placeholder.
+## Reddit
 
-## Editorial workspaces
+Production intake requires approved OAuth access. Configure:
 
-- **Today's edit** shows the complete working edition.
-- **Women's fashion** lists women-led and mixed-celebrity posts.
-- **Men's fashion** lists men-led and mixed-celebrity posts.
-- **Review queue** includes every case requiring context, research, or a final
-  editor decision.
-- **Fashion archive** contains approved and closed outfit stories.
-- **Rights desk** exposes panel-level source, official-reference, exact-match,
-  and image-rights status.
+```env
+REDDIT_SOURCE_MODE=approved_api
+REDDIT_CLIENT_ID=issued-client-id
+REDDIT_CLIENT_SECRET=issued-client-secret
+REDDIT_USER_AGENT=windows:hhc-editorial:v3 (by /u/YOUR_REDDIT_USERNAME)
+REDDIT_SUBREDDIT=BollywoodFashion
+REDDIT_DAILY_TIMEZONE=Asia/Kolkata
+```
 
-Use the global search field (or press `/`) to find a celebrity, designer, event,
-or relationship. Approved stories open an in-app collage preview with links to
-the full-resolution image and evidence bundle.
+The client reuses OAuth tokens, briefly caches identical queries, spaces requests,
+and records shared cooldowns from Reddit's rate-limit headers. It never rotates
+identities or proxies to evade a limit. Anonymous RSS remains a development
+option, with no access guarantee; it is not an approved production fallback.
+See [Reddit's API guidance](https://support.reddithelp.com/hc/en-us/articles/16160319875092-Reddit-Data-API-Wiki).
 
-Every generated draft also has an **Edit collage** control. Editors can
-reorder panels, remove a poor image, or replace it with another source-backed
-current angle, historical match, or verified designer reference. A tuning
-control on every selected panel can make it narrower or wider, keep the whole
-photo visible, or open a freeform manual cropper. In crop mode, draw a rectangle
-around the model, move it, and resize its width and height independently using
-eight edge and corner handles. Everything outside the selected rectangle is
-excluded from the rendered panel. The selected order and per-image layout are
-stored on the case, each save creates an audit event, and the app re-renders
-the preview and evidence bundle without publishing to WordPress or changing
-the source image.
+Titles and captions identify research leads. Matching designer names, colour
+histograms and perceptual hashes are retrieval signals, not proof that two
+garments are identical. Unknown or later dates are excluded from historical
+search. Unapproved historical leads are available for review but are not
+automatically included as confirmed outfit repeats. Publication requires
+recorded editorial verification. Same-post photos still require visual review.
 
-Editors can also upload a JPEG, PNG, or WebP directly inside the collage
-editor. Uploads preserve normal source resolution, require a credit and usage
-confirmation, remain visibly unverified, and are not included until the editor
-selects them. Fashion-section assignments are inferred from explicit title and
-description evidence and can be corrected to Women, Men, or Both on each case.
+## Instagram
 
-The collage editor also supports an optional client-authorized HHC watermark.
-Upload a transparent PNG or WebP, drag it anywhere on the collage, resize it
-from its handles, tilt it with the rotation handle, and adjust width, height,
-opacity, or angle with precision sliders. Side handles resize width, top and
-bottom handles resize height, and corner handles change both dimensions.
-Watermark width and height can each reach 100% of the collage canvas. The
-placement is stored as normalized
-coordinates, so the same transform is applied to the full-resolution PNG and
-WebP rather than only to the browser preview. Editors can hide, restore, reset,
-or replace the mark without changing its source file. A separate unwatermarked
-preview is retained for editing; the downloadable evidence bundle contains the
-finished branded render and records all watermark settings in its manifest.
+The official Graph connector supports the connected professional account and
+configured accounts accessible through Business Discovery. Supply the client's
+authorized token, professional account ID and permitted watch list:
 
-The editor includes reversible colour controls for both the complete collage
-and the watermark independently. Editors can start from Original, Editorial,
-Soft, Vivid, or Mono presets, then fine-tune brightness, contrast, saturation,
-and grayscale strength. The browser preview and full-resolution export use the
-same saved values. An untouched assembled preview is retained so reopening an
-edit never applies a filter twice, and all adjustment values are included in
-the manifest and audit trail.
+```env
+INSTAGRAM_ACCESS_TOKEN=authorized-token
+INSTAGRAM_ACCOUNT_ID=numeric-professional-account-id
+INSTAGRAM_WATCH_ACCOUNTS=account_one,account_two
+META_GRAPH_VERSION=v23.0
+```
 
-Each case represents one outfit. Its collage can combine the current Reddit
-appearance, qualified earlier wearers, same-post angles, and an exact-garment
-image from an official designer campaign or lookbook. Unverified designer
-images are never replaced with placeholders. Images are fitted without
-cropping by default; an editor may explicitly opt into a reversible crop for a
-specific panel. Every output bundle includes panel-level source, credit,
-retrieval date, source grade, rights metadata, and saved layout settings.
+The API version is configurable. Validate it and the app's permissions against
+Meta's current account setup before deployment. The connector follows media
+pages and image carousel children. It does not bypass private accounts, login
+walls or rate limits. Unsupported or inaccessible accounts require an
+editor-selected source and permitted image upload. Videos are not converted into
+fabricated outfit photos. Live access cannot be verified without the client's
+Meta credentials and approvals.
 
-## Safety invariants
+## Daily editions
 
-- `AUTO_APPROVE=false` is enforced by the API.
-- WordPress publishing is disabled until the client supplies an Application
-  Password. The automatic output remains a local draft bundle in the meantime.
-- Daily collages are visibly labelled `AUTOMATED DRAFT`; automation does not
-  silently turn a research signal into an editorial approval.
-- Assets marked `do_not_use` are blocked from rendering.
-- Designer imagery is supplementary evidence and never bypasses identity or
-  rights review.
-- Every decision and render is appended to the audit log.
+`DAILY_AUTOMATION_ENABLED=true` enables scheduled intake.
+`DAILY_AUTOMATION_HOUR_UTC=3` and
+`DAILY_AUTOMATION_MINUTE_UTC=30` start the current edition at 09:00 India time.
+The worker revisits the current edition hourly and checks yesterday for late
+arrivals. Partial runs retry with backoff; one provider failing does not prevent
+the other from running. Posts are deduplicated by their source permalink.
+
+Run exactly one worker for this installation; PostgreSQL advisory locks also
+prevent simultaneous refresh workers. Queued run-now requests survive API
+restarts. A terminated active job becomes interrupted and the scheduled edition
+can retry. The app needs to remain running for daily refresh to occur.
+
+## WordPress
+
+Set `WORDPRESS_SITE_URL` to the client's HTTPS site. Sign in using a WordPress
+Application Password from an account with `edit_posts` and `upload_files`.
+Set `WORDPRESS_PUBLISHER_ENABLED=true` to allow explicit draft handoffs.
+
+Credentials are encrypted in an HttpOnly, SameSite session cookie; sessions
+expire after eight hours and logout revokes the server-side session record.
+Local demo sessions cannot connect to WordPress.
+
+Only drafts are created. The handoff uploads the reviewed image, credits,
+image description, categories and tags. Historical panels require the latest
+approved decision. Changing the collage invalidates its previous rights review.
+The connector reuses known posts/media and blocks blind retries after uncertain
+network results. **Check previous handoff** reconciles a known post; if none is
+found, an administrator must inspect WordPress before resetting the stored
+handoff state. Already published or scheduled posts are managed in WordPress.
+
+WordPress application-password authentication is described in the
+[official REST API documentation](https://developer.wordpress.org/rest-api/using-the-rest-api/authentication/).
+
+## Deployment and verification
+
+Before exposing the app, set `APP_ENV=production`, an HTTPS `APP_ORIGIN`,
+unique random `SESSION_SECRET` and `EDITOR_API_KEY` values, a strong database
+password and matching `DATABASE_URL`. Keep demo login disabled. Terminate TLS
+at the deployment proxy; Secure cookies and HSTS are enabled in production.
+Production startup rejects default API secrets, the sample database password,
+SQLite and anonymous Reddit intake.
+
+The web and API run as non-root users. Media access is authenticated, mutation
+requests require the app's origin, login attempts are rate-limited, script
+nonces protect page execution, uploads are bounded, and remote image fetches
+pin a validated public address while preserving TLS hostname verification.
+
+Back up PostgreSQL and both named volumes together, test restoration, provide
+disk monitoring and job-failure alerts, and establish the client's process for
+source removals and archive retention. Those deployment services and
+provider-specific deletion workflows are not provisioned by this repository.
+
+```powershell
+docker compose run --rm --no-deps -e DATABASE_URL=sqlite:////tmp/hhc-tests.db -e APP_ENV=development -e SCHEDULER_IN_API=false api pytest -q -p no:cacheprovider
+cd apps/web
+npm ci
+npm run typecheck
+npm run build
+npm run test:e2e
+```
+
+Browser tests default to an isolated preview at http://localhost:3200 and
+Microsoft Edge. Set `HHC_TEST_BASE_URL`, `HHC_TEST_BROWSER`,
+`HHC_TEST_USERNAME` and `HHC_TEST_PASSWORD` for another test installation.
+Use a disposable demo database: acceptance tests intentionally save draft stories
+and collage versions. Never point them at the client's live editorial workspace.
+
+Provider calls and WordPress writes are mocked in the automated API tests.
+A passing test suite is not a guarantee of error-free external services or
+perfect outfit identification. Client staging sign-off, live credential testing,
+backup restoration and operational monitoring remain release requirements.

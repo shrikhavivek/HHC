@@ -1,6 +1,7 @@
 import asyncio
 import os
 import mimetypes
+import hmac
 import uuid
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
@@ -32,10 +33,16 @@ from .config import get_settings
 from .database import Base, SessionLocal, engine, get_db
 from .editor_uploads import MAX_UPLOAD_BYTES, MAX_WATERMARK_UPLOAD_BYTES, UploadValidationError, store_editor_image, store_watermark_image
 from .fashion_category import case_fashion_category
+from .edition_window import in_current_edition
 from .models import AuditEvent, Candidate, Case, Collage, Decision, JobRun
 from .public_sources import DuplicatePublicSourceError, PublicSourceError
 from .schemas import CollageEditInput, CollageInput, DecisionInput, FashionCategoryInput, ManualIntake, SourceUrlIntake
 from .seed import seed_database
+from .security import PrivateAPIMiddleware, current_actor
+from .review import approval_errors
+from .editorial import router as editorial_router
+from .wordpress import router as wordpress_router
+from .worker import router as worker_router
 
 
 settings = get_settings()
@@ -47,7 +54,7 @@ mimetypes.add_type("image/webp", ".webp")
 
 
 def require_editor(x_editor_key: str = Header(default="")):
-    if not x_editor_key or x_editor_key != settings.editor_api_key:
+    if not x_editor_key or not hmac.compare_digest(x_editor_key, settings.editor_api_key):
         raise HTTPException(status_code=401, detail="Invalid editor credentials")
 
 
@@ -89,6 +96,7 @@ def _watermark_editor_state(extraction: dict, edit: dict) -> tuple[dict | None, 
 def case_json(case: Case, detail=False):
     data = {
         "id": case.id, "title": case.source_title, "body": case.source_body, "permalink": case.permalink,
+        "context_revision": (case.extraction or {}).get("context_revision", 0),
         "celebrity": case.celebrity, "designer": case.designer, "event_name": case.event_name, "event_date": case.event_date,
         "status": case.status, "match_type": case.match_type, "confidence": case.confidence, "risk_level": case.risk_level,
         "base_image": case.base_image, "demo_data": case.demo_data, "source_type": case.source_type,
@@ -132,6 +140,8 @@ def case_json(case: Case, detail=False):
             "watermark": watermark,
             "customized": bool(saved or watermark or edit.get("canvas_format") or edit.get("layout_template")),
             "updated_at": edit.get("updated_at"),
+            "revision": int(edit.get("revision", 0)),
+            "export_scale": edit.get("export_scale", 1),
             "editor_id": edit.get("editor_id"),
         }
     return data
@@ -149,44 +159,32 @@ def candidate_json(candidate: Candidate):
 
 
 def _scheduled_run():
-    with SessionLocal() as db:
-        run_daily_automation(db, settings, STATIC_DIR, trigger="scheduler")
+    from .worker import tick, heartbeat
+    heartbeat()
+    tick()
 
 
 async def _daily_scheduler():
-    # Populate a new installation automatically, then run at the configured
-    # UTC time every day. The scheduler key keeps restarts idempotent.
-    await asyncio.sleep(4)
     while True:
         try:
             await asyncio.to_thread(_scheduled_run)
         except Exception:
-            # Failure is persisted in JobRun/AuditEvent; the API stays healthy
-            # and the next scheduled run can recover.
-            pass
-        now = datetime.now(timezone.utc)
-        next_run = now.replace(
-            hour=settings.daily_automation_hour_utc,
-            minute=settings.daily_automation_minute_utc,
-            second=0,
-            microsecond=0,
-        )
-        if next_run <= now:
-            next_run += timedelta(days=1)
-        await asyncio.sleep(max(60, (next_run - now).total_seconds()))
+            import logging
+            logging.getLogger(__name__).exception("Daily scheduler recovered after a failure")
+        await asyncio.sleep(30)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(engine)
-    if settings.reddit_source_mode == "manual":
+    if settings.reddit_source_mode == "manual" and settings.app_env != "production":
         with SessionLocal() as db:
             seed_database(db)
     with SessionLocal() as db:
         migrate_legacy_matcher_outputs(db, settings, STATIC_DIR)
         refresh_existing_case_metadata(db)
         refresh_existing_content_policy(db)
-    scheduler = asyncio.create_task(_daily_scheduler()) if settings.daily_automation_enabled else None
+    scheduler = asyncio.create_task(_daily_scheduler()) if settings.scheduler_in_api else None
     try:
         yield
     finally:
@@ -200,25 +198,34 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Outfit Research API", version="1.0.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=[x.strip() for x in settings.cors_origins.split(",")], allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(PrivateAPIMiddleware, key=settings.editor_api_key)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.mount("/outputs", StaticFiles(directory=settings.output_dir), name="outputs")
 app.mount("/media-files", StaticFiles(directory=settings.media_dir), name="media-files")
+app.include_router(editorial_router)
+app.include_router(wordpress_router)
+app.include_router(worker_router)
 
 
 @app.get("/health")
 def health():
+    try:
+        with engine.connect() as connection:
+            connection.execute(select(1))
+    except Exception:
+        raise HTTPException(503, "Database unavailable") from None
     return {
         "status": "ok",
         "auto_approve": False,
-        "wordpress": False,
+        "wordpress": settings.wordpress_publisher_enabled,
         "source_mode": settings.reddit_source_mode,
-        "reddit_authentication": "oauth" if settings.reddit_client_id and settings.reddit_client_secret else "anonymous",
+        "reddit_authentication": "oauth" if settings.reddit_source_mode != "rss" and settings.reddit_client_id and settings.reddit_client_secret else "anonymous",
     }
 
 
 @app.get("/api/dashboard")
 def dashboard(db: Session = Depends(get_db)):
-    eligible_cases = [case for case in db.scalars(select(Case)).all() if case_content_eligible(case)]
+    eligible_cases = [case for case in db.scalars(select(Case)).all() if case_content_eligible(case) and in_current_edition(case, settings.reddit_daily_timezone)]
     has_live = any(not case.demo_data and case.source_type == "reddit_rss" for case in eligible_cases)
     visible_cases = [case for case in eligible_cases if not case.demo_data] if has_live else eligible_cases
     counts: dict[str, int] = {}
@@ -252,7 +259,7 @@ def dashboard(db: Session = Depends(get_db)):
         "rights_pending": rights_pending,
         "rights_blocked": rights_blocked,
         "source_mode": settings.reddit_source_mode,
-        "reddit_authentication": "oauth" if settings.reddit_client_id and settings.reddit_client_secret else "anonymous",
+        "reddit_authentication": "oauth" if settings.reddit_source_mode != "rss" and settings.reddit_client_id and settings.reddit_client_secret else "anonymous",
         "auto_approve": False,
         "automation_enabled": settings.daily_automation_enabled,
         "last_run": None if not last_run else {"id": last_run.id, "status": last_run.status, "created_at": last_run.created_at.isoformat()},
@@ -276,7 +283,7 @@ def list_cases(status_filter: str | None = Query(default=None, alias="status"), 
         stmt = stmt.where(Case.demo_data.is_(False))
     if status_filter and status_filter != "all":
         stmt = stmt.where(Case.status == status_filter)
-    return [case_json(row) for row in db.scalars(stmt).all() if case_content_eligible(row)]
+    return [case_json(row) for row in db.scalars(stmt).all() if case_content_eligible(row) and in_current_edition(row, settings.reddit_daily_timezone)]
 
 
 @app.get("/api/cases/{case_id}")
@@ -287,14 +294,15 @@ def get_case(case_id: str, db: Session = Depends(get_db)):
         raise HTTPException(404, "Case not found")
     data = case_json(case, detail=True)
     collage = db.scalar(select(Collage).where(Collage.case_id == case_id).order_by(Collage.created_at.desc()))
-    preview_url = f"/outputs/case-{case.id}/collage.webp"
-    base_preview_path = Path(settings.output_dir) / f"case-{case.id}" / "collage-base.webp"
-    source_preview_path = Path(settings.output_dir) / f"case-{case.id}" / "collage-source.webp"
+    relative_dir = Path(collage.image_path).resolve().parent.relative_to(Path(settings.output_dir).resolve()).as_posix() if collage else f"case-{case.id}"
+    preview_url = f"/outputs/{relative_dir}/collage.webp"
+    base_preview_path = Path(settings.output_dir) / relative_dir / "collage-base.webp"
+    source_preview_path = Path(settings.output_dir) / relative_dir / "collage-source.webp"
     data["latest_collage"] = None if not collage else {
         "id": collage.id,
         "preview_url": preview_url,
-        "base_preview_url": f"/outputs/case-{case.id}/collage-base.webp" if base_preview_path.is_file() else preview_url,
-        "source_preview_url": f"/outputs/case-{case.id}/collage-source.webp" if source_preview_path.is_file() else (f"/outputs/case-{case.id}/collage-base.webp" if base_preview_path.is_file() else preview_url),
+        "base_preview_url": f"/outputs/{relative_dir}/collage-base.webp" if base_preview_path.is_file() else preview_url,
+        "source_preview_url": f"/outputs/{relative_dir}/collage-source.webp" if source_preview_path.is_file() else (f"/outputs/{relative_dir}/collage-base.webp" if base_preview_path.is_file() else preview_url),
         "bundle_url": f"/api/cases/{case.id}/bundle",
         "created_at": collage.created_at.isoformat(),
     }
@@ -324,6 +332,7 @@ def manual_intake(payload: ManualIntake, db: Session = Depends(get_db)):
 
 @app.post("/api/intake/source-url", status_code=201, dependencies=[Depends(require_editor)])
 def source_url_intake(payload: SourceUrlIntake, db: Session = Depends(get_db)):
+    payload.editor_id = current_actor()
     try:
         return import_public_post_automation(
             db,
@@ -341,12 +350,14 @@ def source_url_intake(payload: SourceUrlIntake, db: Session = Depends(get_db)):
 
 @app.post("/api/cases/{case_id}/fashion-category", dependencies=[Depends(require_editor)])
 def set_fashion_category(case_id: str, payload: FashionCategoryInput, db: Session = Depends(get_db)):
+    payload.editor_id = current_actor()
+    editor_id = current_actor()
     case = db.get(Case, case_id)
     if not case or not case_content_eligible(case):
         raise HTTPException(404, "Case not found")
     extraction = case.extraction if isinstance(case.extraction, dict) else {}
     previous = case_fashion_category(case)
-    case.extraction = {**extraction, "fashion_category": payload.category}
+    case.extraction = {**extraction, "fashion_category": payload.category, "fashion_category_source": "editor_confirmed"}
     db.add(AuditEvent(
         entity_type="case",
         entity_id=case.id,
@@ -373,11 +384,15 @@ def queue_research(case_id: str, db: Session = Depends(get_db)):
 
 @app.post("/api/candidates/{candidate_id}/decision", dependencies=[Depends(require_editor)])
 def decide(candidate_id: str, payload: DecisionInput, db: Session = Depends(get_db)):
+    payload.editor_id = current_actor()
     stmt = select(Candidate).where(Candidate.id == candidate_id).options(selectinload(Candidate.case), selectinload(Candidate.decisions))
     candidate = db.scalar(stmt)
     if not candidate or not case_content_eligible(candidate.case):
         raise HTTPException(404, "Candidate not found")
     if payload.decision == "approved":
+        errors = approval_errors(candidate)
+        if errors:
+            raise HTTPException(422, "; ".join(errors))
         strong_source = any(item.get("grade") in {"A", "B"} and item.get("url") for item in candidate.evidence)
         blocked = candidate.checks.get("same_photo") or candidate.checks.get("same_event") or candidate.checks.get("contradictions")
         if not strong_source:
@@ -387,6 +402,7 @@ def decide(candidate_id: str, payload: DecisionInput, db: Session = Depends(get_
         if candidate.rights_status == "do_not_use":
             raise HTTPException(422, "Asset rights status blocks approval")
     decision = Decision(candidate_id=candidate.id, decision=payload.decision, reason=payload.reason, editor_id=payload.editor_id)
+    candidate.decisions.append(decision)
     candidate.status = payload.decision
     candidate.case.status = "approved" if payload.decision == "approved" else payload.decision
     db.add(decision)
@@ -435,6 +451,7 @@ def create_collage(case_id: str, payload: CollageInput, db: Session = Depends(ge
             watermark_options=saved_watermark,
             canvas_format=saved_canvas_format,
             layout_template=saved_layout_template,
+            export_scale=edit.get("export_scale", 1),
         )
     except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(422, str(exc)) from exc
@@ -458,6 +475,7 @@ async def upload_collage_asset(
     editor_id: str = Form("editor@atelier"),
     db: Session = Depends(get_db),
 ):
+    editor_id = current_actor()
     case = db.get(Case, case_id)
     if not case or not case_content_eligible(case):
         raise HTTPException(404, "Case not found")
@@ -618,9 +636,13 @@ async def upload_collage_watermark(
 
 @app.post("/api/cases/{case_id}/collage/edit", dependencies=[Depends(require_editor)])
 def edit_collage(case_id: str, payload: CollageEditInput, db: Session = Depends(get_db)):
+    payload.editor_id = current_actor()
+    if settings.app_env == "production" and payload.expected_revision is None:
+        raise HTTPException(428, "A collage revision is required")
     case = db.scalar(
         select(Case)
         .where(Case.id == case_id)
+        .with_for_update()
         .options(selectinload(Case.candidates).selectinload(Candidate.decisions))
     )
     if not case or not case_content_eligible(case):
@@ -640,6 +662,8 @@ def edit_collage(case_id: str, payload: CollageEditInput, db: Session = Depends(
 
     extraction = case.extraction if isinstance(case.extraction, dict) else {}
     previous = extraction.get("collage_edit") if isinstance(extraction.get("collage_edit"), dict) else {}
+    if payload.expected_revision is not None and payload.expected_revision != previous.get("revision", 0):
+        raise HTTPException(409, "Another editor saved this collage. Reopen it before saving your changes.")
     edited_at = datetime.now(timezone.utc).isoformat()
     panel_options = {
         panel_id: option.model_dump()
@@ -662,12 +686,14 @@ def edit_collage(case_id: str, payload: CollageEditInput, db: Session = Depends(
             "panel_ids": payload.panel_ids,
             "panel_options": panel_options,
             "canvas_format": payload.canvas_format,
+            "export_scale": payload.export_scale,
             "layout_template": payload.layout_template,
             "collage_adjustments": payload.collage_adjustments.model_dump(),
             "watermark": watermark,
             "updated_at": edited_at,
             "editor_id": payload.editor_id,
             "version": 5,
+            "revision": int(previous.get("revision", 0)) + 1,
         },
     }
     try:
@@ -697,6 +723,8 @@ def edit_collage(case_id: str, payload: CollageEditInput, db: Session = Depends(
             actor=payload.editor_id,
             detail={
                 "collage_id": collage.id,
+                "previous_edit": previous,
+                "saved_edit": case.extraction["collage_edit"],
                 "previous_panel_ids": previous.get("panel_ids", []),
                 "panel_ids": payload.panel_ids,
                 "panel_options": panel_options,

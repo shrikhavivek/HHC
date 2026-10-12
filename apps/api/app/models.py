@@ -101,3 +101,34 @@ class JobRun(Base):
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
+
+class EditorSession(Base):
+    __tablename__ = "editor_sessions"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    actor: Mapped[str] = mapped_column(String(120))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class ServiceState(Base):
+    """Durable rate-limit, scheduler and login counters; never contains secrets."""
+    __tablename__ = "service_state"
+    key: Mapped[str] = mapped_column(String(180), primary_key=True)
+    value: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class StoryDraft(Base):
+    __tablename__ = "story_drafts"
+    case_id: Mapped[str] = mapped_column(ForeignKey("cases.id"), primary_key=True)
+    title: Mapped[str] = mapped_column(String(300), default="")
+    body: Mapped[str] = mapped_column(Text, default="")
+    alt_text: Mapped[str] = mapped_column(String(1000), default="")
+    credits: Mapped[str] = mapped_column(Text, default="")
+    category_ids: Mapped[list] = mapped_column(JSON, default=list)
+    tag_ids: Mapped[list] = mapped_column(JSON, default=list)
+    reviewed_collage_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    revision: Mapped[int] = mapped_column(Integer, default=0)
+    wordpress_post_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    wordpress_media_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    wordpress_site: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sync_state: Mapped[str] = mapped_column(String(40), default="not_sent")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)

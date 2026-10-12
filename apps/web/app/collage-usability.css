@@ -1,0 +1,49 @@
+/* Keep editing tools readable and reachable at every viewport height. */
+.collage-editor-body { grid-template-columns:minmax(0,1.15fr) minmax(0,.85fr); grid-template-rows:max-content; align-items:start; align-content:start; overflow-y:auto; scrollbar-width:auto; scrollbar-gutter:stable; overscroll-behavior:contain; }
+.collage-editor-modal .selected-panel-list,.collage-editor-modal .available-panel-list { overflow:visible; height:auto; max-height:none; }
+.collage-editor-modal .collage-archive-list,.collage-editor-modal .collage-rights-list { max-height:none; overflow:visible; }
+.collage-editor-body:focus-visible { outline:2px solid #822e4d; outline-offset:-3px; }
+.case-list { overscroll-behavior-y:auto; scrollbar-width:auto; }
+.collage-editor-modal { height:calc(100dvh - 32px); max-height:calc(100dvh - 32px); }
+.collage-editor-modal :is(button,input,select,textarea) { font-size:12px; }
+.collage-editor-modal button { min-height:40px; }
+.collage-editor-modal :is(p,label,.edition-hint) { font-size:12px; line-height:1.6; }
+.collage-editor-modal small { font-size:10px; line-height:1.5; }
+.collage-editor-modal :is(.selected-panel-list,.available-panel-list) { scrollbar-width:auto; scrollbar-color:#ae7187 #eee3df; }
+.panel-controls { flex-wrap:wrap; }
+.panel-controls button { min-width:36px; }
+.panel-sort-card > div { min-width:0; }
+.panel-sort-card p,.panel-sort-card strong { white-space:normal; overflow-wrap:anywhere; }
+.editor-section-heading { flex-wrap:wrap; }
+.filter-presets { grid-template-columns:repeat(3,minmax(0,1fr)); }
+.filter-presets button { font-size:11px; white-space:normal; text-overflow:clip; }
+.watermark-note { font-size:11px!important; }
+.watermark-editor-panel[open] { max-height:none; overflow:visible; }
+.collage-editor-modal > footer { flex-wrap:wrap; gap:10px; }
+.collage-editor-modal > footer > div { flex-wrap:wrap; }
+.collage-editor-modal > footer > div:first-child { font-size:11px; }
+.collage-editor-summary { flex-wrap:wrap; gap:8px 18px; padding:10px 24px; font-size:11px; }
+.studio-sidebar { overflow-y:auto; scrollbar-width:thin; }
+.filters { scrollbar-width:thin; }
+.filters::-webkit-scrollbar { display:block; height:6px; }
+.filters::-webkit-scrollbar-thumb { background:#b68e9b; border-radius:8px; }
+.collage-result-frame { padding:0; background:#292128; }
+.collage-result-frame img { box-shadow:none; }
+@media(max-width:900px) {
+  .collage-editor-body { display:block; overflow-y:auto; scrollbar-width:auto; }
+  .collage-editor-modal :is(.selected-panel-list,.available-panel-list) { overflow:visible; }
+  .studio-sidebar { overflow-y:visible; }
+}
+@media(max-width:640px), (max-height:600px) {
+  .collage-editor-modal { height:calc(100dvh - 14px); max-height:calc(100dvh - 14px); }
+  .collage-editor-modal > header { padding:12px 16px; }
+  .collage-editor-modal > header h2 { font-size:27px; }
+  .collage-editor-modal > header p { display:none; }
+  .collage-editor-summary { flex-direction:row; padding:7px 16px; }
+  .collage-editor-summary span { font-size:10px; }
+  .studio-history-bar { padding:8px 12px; flex-wrap:wrap; }
+  .studio-history-bar span { font-size:10px; }
+  .collage-editor-modal > footer { padding:10px 14px; }
+  .collage-editor-modal > footer > div:first-child { display:none; }
+  .collage-editor-modal > footer > div:last-child { width:100%; justify-content:flex-end; }
+}

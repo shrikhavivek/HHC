@@ -1,4 +1,12 @@
 services:
+  storage-init:
+    build: ./apps/api
+    user: "0:0"
+    command: ["chown", "-R", "10001:10001", "/data/outputs", "/data/media"]
+    security_opt: ["no-new-privileges:true"]
+    volumes:
+      - output_data:/data/outputs
+      - media_data:/data/media
   db:
     image: postgres:16-alpine
     environment:
@@ -15,15 +23,22 @@ services:
 
   api:
     build: ./apps/api
-    environment:
+    environment: &api_environment
+      APP_ENV: ${APP_ENV:-development}
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://outfit:change-me@db:5432/outfit_research}
       EDITOR_API_KEY: ${EDITOR_API_KEY:-local-editor-key}
       CORS_ORIGINS: http://localhost:3100
       OUTPUT_DIR: /data/outputs
       MEDIA_DIR: /data/media
       AUTO_APPROVE: "false"
-      WORDPRESS_PUBLISHER_ENABLED: "false"
-      REDDIT_SOURCE_MODE: rss
+      WORDPRESS_PUBLISHER_ENABLED: ${WORDPRESS_PUBLISHER_ENABLED:-false}
+      WORDPRESS_SITE_URL: ${WORDPRESS_SITE_URL:-https://www.highheelconfidential.com}
+      REDDIT_SOURCE_MODE: ${REDDIT_SOURCE_MODE:-rss}
+      SCHEDULER_IN_API: "false"
+      INSTAGRAM_ACCESS_TOKEN: ${INSTAGRAM_ACCESS_TOKEN:-}
+      INSTAGRAM_ACCOUNT_ID: ${INSTAGRAM_ACCOUNT_ID:-}
+      INSTAGRAM_WATCH_ACCOUNTS: ${INSTAGRAM_WATCH_ACCOUNTS:-}
+      META_GRAPH_VERSION: ${META_GRAPH_VERSION:-v23.0}
       REDDIT_SUBREDDIT: BollywoodFashion
       REDDIT_USER_AGENT: "${REDDIT_USER_AGENT:-hhc-daily-drafts/2.0 (contact: admin@highheelconfidential.com)}"
       REDDIT_CLIENT_ID: ${REDDIT_CLIENT_ID:-}
@@ -36,20 +51,24 @@ services:
       PUBLIC_IMPORT_ALLOWED_DOMAINS: ${PUBLIC_IMPORT_ALLOWED_DOMAINS:-instagram.com,threads.net,facebook.com,fb.watch,x.com,twitter.com,t.co,pinterest.com,pin.it,tiktok.com,youtube.com,youtu.be,reddit.com}
       SERPAPI_KEY: ${SERPAPI_KEY:-}
       DESIGNER_REFERENCE_SEARCH_ENABLED: "true"
-      DAILY_AUTOMATION_ENABLED: "true"
+      DAILY_AUTOMATION_ENABLED: ${DAILY_AUTOMATION_ENABLED:-true}
       DAILY_GALLERY_RETRY_BUDGET: ${DAILY_GALLERY_RETRY_BUDGET:-8}
       DAILY_REMOTE_SEARCH_BUDGET: ${DAILY_REMOTE_SEARCH_BUDGET:-8}
       REDDIT_OAUTH_DAILY_SEARCH_BUDGET: ${REDDIT_OAUTH_DAILY_SEARCH_BUDGET:-80}
       DAILY_DESIGNER_SEARCH_BUDGET: ${DAILY_DESIGNER_SEARCH_BUDGET:-8}
       DAILY_AUTOMATION_HOUR_UTC: ${DAILY_AUTOMATION_HOUR_UTC:-3}
       DAILY_AUTOMATION_MINUTE_UTC: ${DAILY_AUTOMATION_MINUTE_UTC:-30}
-    ports: ["8100:8000"]
+    ports: ["127.0.0.1:8100:8000"]
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
     volumes:
       - output_data:/data/outputs
       - media_data:/data/media
     depends_on:
       db:
         condition: service_healthy
+      storage-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 10s
@@ -62,6 +81,8 @@ services:
       args:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8100}
     environment:
+      APP_ENV: ${APP_ENV:-development}
+      APP_ORIGIN: ${APP_ORIGIN:-http://localhost:3100}
       API_INTERNAL_URL: ${API_INTERNAL_URL:-http://api:8000}
       EDITOR_API_KEY: ${EDITOR_API_KEY:-local-editor-key}
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8100}
@@ -69,9 +90,24 @@ services:
       SESSION_SECRET: ${SESSION_SECRET:-local-development-session-secret-change-me}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
       DEMO_LOGIN_ENABLED: ${DEMO_LOGIN_ENABLED:-true}
-      DEMO_USERNAME: ${DEMO_USERNAME:-hhc-demo}
-      DEMO_PASSWORD: ${DEMO_PASSWORD:-HHC-Demo-2026!}
-    ports: ["3100:3000"]
+      DEMO_USERNAME: ${DEMO_USERNAME:-ShrikhaVivek}
+      DEMO_PASSWORD: ${DEMO_PASSWORD:-Shrikha123}
+    ports: ["127.0.0.1:3100:3000"]
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    depends_on:
+      api:
+        condition: service_healthy
+
+  worker:
+    build: ./apps/api
+    command: ["python", "-m", "app.worker"]
+    environment: *api_environment
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    volumes:
+      - output_data:/data/outputs
+      - media_data:/data/media
     depends_on:
       api:
         condition: service_healthy

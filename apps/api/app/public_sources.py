@@ -12,6 +12,7 @@ from pathlib import Path
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import requests
+from .safe_http import public_get
 from bs4 import BeautifulSoup
 from PIL import Image, UnidentifiedImageError
 
@@ -119,7 +120,7 @@ def _fetch_limited(
         if referer:
             headers["Referer"] = referer
         try:
-            with requests.get(url, headers=headers, timeout=25, stream=True, allow_redirects=False) as response:
+            with public_get(url, headers=headers, timeout=25, stream=True, allow_redirects=False) as response:
                 if response.status_code in REDIRECT_STATUSES:
                     location = response.headers.get("Location")
                     if not location:

@@ -46,17 +46,15 @@ export default function LoginPage() {
         <div className="login-visual-body login-visual-body-refined">
           <div className="visual-copy">
             <span className="login-kicker">High Heel Confidential</span>
-            <h1>The daily edit.<br /><em>Distinctly HHC.</em></h1>
-            <p>A private space for the High Heel Confidential editorial team.</p>
+            <h1>Good looks.<br /><em>Great stories.</em></h1>
+            <p>A little fashion. A lot of perspective. Your next great edit starts here.</p>
+            <div className="atelier-tags"><span>The looks</span><span>The details</span><span>The conversation</span></div>
           </div>
 
-          <div className="login-emblem" aria-hidden="true">
-            <div className="login-emblem-ring">
-              <span>HHC</span>
-              <small>Private edition</small>
-            </div>
-            <i className="login-emblem-line line-one" />
-            <i className="login-emblem-line line-two" />
+          <div className="atelier-art" aria-hidden="true">
+            <div className="atelier-swatch"><span>THE PALETTE</span><i/><i/><i/></div>
+            <div className="atelier-cover"><small>HIGH HEEL CONFIDENTIAL</small><strong>The<br/><em>style</em><br/>files.</strong><svg viewBox="0 0 220 200" fill="none"><path d="M33 135c24-6 44-27 58-57l25-39c5 29 17 56 43 72l27 16c14 8 10 23-7 23H76c-19 0-34-4-43-15Z" fill="currentColor"/><path d="m147 149 11 38h7l6-38M89 78l27-39" stroke="currentColor" strokeWidth="5"/><path d="M39 136c34 13 91 9 146 6" stroke="#f9d9dd" strokeWidth="2"/></svg><span>AN EYE FOR THE DETAILS.</span></div>
+            <div className="atelier-sticker">Always<br/><em>in style.</em><span>✦</span></div>
           </div>
         </div>
 
@@ -68,9 +66,9 @@ export default function LoginPage() {
         <form className="login-form" onSubmit={login}>
           <header className="login-form-header">
             <div className="login-lock" aria-hidden="true">H</div>
-            <span className="login-kicker dark">Member sign in</span>
-            <h2>Welcome back</h2>
-            <p>Sign in to continue to your private workspace.</p>
+            <span className="login-kicker dark">Your editorial escape</span>
+            <h2>Hello, editor.</h2>
+            <p>The looks are waiting. Let’s make an edit.</p>
           </header>
 
           <div className="login-fields">
@@ -93,7 +91,7 @@ export default function LoginPage() {
           {error && <div className="login-error" role="alert">{error}</div>}
 
           <button className="login-submit" disabled={loading}>
-            {loading ? "Signing in..." : "Sign in"}
+            {loading ? "Signing in..." : "Enter the studio"}
             <span aria-hidden="true">&rarr;</span>
           </button>
           <small className="login-form-footnote">Authorized access only</small>
