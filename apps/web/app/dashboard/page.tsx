@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { EditorialDesk } from "@/components/editorial-desk";
+import { StudioBrand } from "@/components/studio-brand";
 import { MatchVerification } from "@/components/match-verification";
 import { OutfitContext } from "@/components/outfit-context";
 import { useUndoHistory } from "@/lib/use-undo-history";
@@ -181,16 +182,16 @@ const VIEW_META: Record<WorkspaceView, { label: string; short: string; title: st
   today: {
     label: "Today's edit",
     short: "Daily desk",
-    title: "Today’s fashion intelligence.",
-    accent: "Every look, one clear story.",
-    description: "New Bollywood fashion posts, outfit matches and editor-ready collage plans in one focused workspace.",
+    title: "The daily edit.",
+    accent: "A considered view of what’s being worn.",
+    description: "Discover the looks. Follow the details. Shape the story.",
     listTitle: "Looks in focus",
     listKicker: "The daily rail",
   },
   women: {
     label: "Women’s fashion",
     short: "Women’s desk",
-    title: "Women’s fashion intelligence.",
+    title: "The womenswear edit.",
     accent: "Every appearance, clearly filed.",
     description: "Women’s looks from the daily Reddit intake, with outfit research and collage status together.",
     listTitle: "Women’s looks",
@@ -199,7 +200,7 @@ const VIEW_META: Record<WorkspaceView, { label: string; short: string; title: st
   men: {
     label: "Men’s fashion",
     short: "Men’s desk",
-    title: "Men’s fashion intelligence.",
+    title: "The menswear edit.",
     accent: "A sharper menswear archive.",
     description: "Men’s looks separated into a focused listing without losing their editorial evidence.",
     listTitle: "Men’s looks",
@@ -208,7 +209,7 @@ const VIEW_META: Record<WorkspaceView, { label: string; short: string; title: st
   both: {
     label: "Both fashion",
     short: "Shared desk",
-    title: "Women and men, together.",
+    title: "In good company.",
     accent: "Group appearances, clearly filed.",
     description: "Looks featuring both women and men are collected in their own section for focused group-post review.",
     listTitle: "Both fashion looks",
@@ -217,7 +218,7 @@ const VIEW_META: Record<WorkspaceView, { label: string; short: string; title: st
   pending: {
     label: "Pending review",
     short: "Pending",
-    title: "Pending editorial review.",
+    title: "On the review desk.",
     accent: "Resolve what needs a human eye.",
     description: "Review context gaps, verify garment identity and make defensible decisions before any collage is produced.",
     listTitle: "Awaiting action",
@@ -226,7 +227,7 @@ const VIEW_META: Record<WorkspaceView, { label: string; short: string; title: st
   reviewed: {
     label: "Reviewed",
     short: "Reviewed",
-    title: "Reviewed outfit stories.",
+    title: "The reviewed edit.",
     accent: "Decisions preserved for the next edit.",
     description: "Revisit approved and closed outfit research, then reopen its collage, archive evidence and source-rights record.",
     listTitle: "Reviewed stories",
@@ -810,6 +811,7 @@ export default function DashboardPage() {
   const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [decisionBusy, setDecisionBusy] = useState(false);
   const [researchBusy, setResearchBusy] = useState(false);
@@ -907,9 +909,10 @@ export default function DashboardPage() {
       if (!dashboardResponse.ok || !casesResponse.ok) throw new Error("Research API unavailable");
       setDashboard(await dashboardResponse.json());
       setCases(await casesResponse.json());
+      setLoadError("");
       if (silent && !quiet) setToast("Daily edition refreshed.");
     } catch {
-      setToast("The research API is unavailable. Check Docker services.");
+      setLoadError("We couldn’t refresh your edit. Your saved work is safe. Please try again.");
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -1298,75 +1301,73 @@ export default function DashboardPage() {
     }
   }
 
-  return <main className="shell studio-shell">
+  return <main className="shell studio-shell" data-theme="dark">
     <aside className="sidebar studio-sidebar">
-      <div className="brand"><span className="brand-mark">H</span><div><strong>High Heel<br/>Confidential</strong><small>Outfit intelligence studio</small></div></div>
+      <StudioBrand compact />
       <button type="button" className="edition-card" onClick={() => void load(true)} title="Refresh this daily edition">
         <span><small>Edition</small><strong>{editionCode}</strong></span><Icon name="refresh" size={15}/>
       </button>
       <nav aria-label="Workspace navigation">
-        <button type="button" className={`nav-item ${workspaceView === "today" ? "active" : ""}`} onClick={() => switchView("today")} aria-current={workspaceView === "today" ? "page" : undefined}><Icon name="grid"/><span className="nav-copy"><strong>Today&apos;s edit</strong><small>Daily outfit desk</small></span><b>{cases.length}</b></button>
-        <button type="button" className={`nav-item ${workspaceView === "women" ? "active" : ""}`} onClick={() => switchView("women")} aria-current={workspaceView === "women" ? "page" : undefined}><Icon name="woman"/><span className="nav-copy"><strong>Women&apos;s fashion</strong><small>Women-only looks</small></span><b>{womenCount}</b></button>
-        <button type="button" className={`nav-item ${workspaceView === "men" ? "active" : ""}`} onClick={() => switchView("men")} aria-current={workspaceView === "men" ? "page" : undefined}><Icon name="man"/><span className="nav-copy"><strong>Men&apos;s fashion</strong><small>Men-only looks</small></span><b>{menCount}</b></button>
-        <button type="button" className={`nav-item ${workspaceView === "both" ? "active" : ""}`} onClick={() => switchView("both")} aria-current={workspaceView === "both" ? "page" : undefined}><Icon name="both"/><span className="nav-copy"><strong>Both fashion</strong><small>Women &amp; men together</small></span><b>{bothCount}</b></button>
-        <button type="button" className={`nav-item ${workspaceView === "pending" ? "active" : ""}`} onClick={() => switchView("pending")} aria-current={workspaceView === "pending" ? "page" : undefined}><Icon name="queue"/><span className="nav-copy"><strong>Pending review</strong><small>Needs your decision</small></span><b>{pendingCount}</b></button>
-        <button type="button" className={`nav-item ${workspaceView === "reviewed" ? "active" : ""}`} onClick={() => switchView("reviewed")} aria-current={workspaceView === "reviewed" ? "page" : undefined}><Icon name="archive"/><span className="nav-copy"><strong>Reviewed</strong><small>Completed decisions</small></span><b>{reviewedCount}</b></button>
+        <button type="button" aria-label="Today's edit" title="Today's edit" data-short-label="Today" className={`nav-item ${workspaceView === "today" ? "active" : ""}`} onClick={() => switchView("today")} aria-current={workspaceView === "today" ? "page" : undefined}><Icon name="grid"/><span className="nav-copy"><strong>Today&apos;s edit</strong><small>Daily outfit desk</small></span><b>{cases.length}</b></button>
+        <button type="button" aria-label="Women's fashion" title="Women's fashion" data-short-label="Women" className={`nav-item ${workspaceView === "women" ? "active" : ""}`} onClick={() => switchView("women")} aria-current={workspaceView === "women" ? "page" : undefined}><Icon name="woman"/><span className="nav-copy"><strong>Women&apos;s fashion</strong><small>Women-only looks</small></span><b>{womenCount}</b></button>
+        <button type="button" aria-label="Men's fashion" title="Men's fashion" data-short-label="Men" className={`nav-item ${workspaceView === "men" ? "active" : ""}`} onClick={() => switchView("men")} aria-current={workspaceView === "men" ? "page" : undefined}><Icon name="man"/><span className="nav-copy"><strong>Men&apos;s fashion</strong><small>Men-only looks</small></span><b>{menCount}</b></button>
+        <button type="button" aria-label="Both fashion" title="Both fashion" data-short-label="Both" className={`nav-item ${workspaceView === "both" ? "active" : ""}`} onClick={() => switchView("both")} aria-current={workspaceView === "both" ? "page" : undefined}><Icon name="both"/><span className="nav-copy"><strong>Both fashion</strong><small>Women &amp; men together</small></span><b>{bothCount}</b></button>
+        <button type="button" aria-label="Pending review" title="Pending review" data-short-label="Review" className={`nav-item ${workspaceView === "pending" ? "active" : ""}`} onClick={() => switchView("pending")} aria-current={workspaceView === "pending" ? "page" : undefined}><Icon name="queue"/><span className="nav-copy"><strong>Pending review</strong><small>Needs your decision</small></span><b>{pendingCount}</b></button>
+        <button type="button" aria-label="Reviewed" title="Reviewed" data-short-label="Archive" className={`nav-item ${workspaceView === "reviewed" ? "active" : ""}`} onClick={() => switchView("reviewed")} aria-current={workspaceView === "reviewed" ? "page" : undefined}><Icon name="archive"/><span className="nav-copy"><strong>Reviewed</strong><small>Completed decisions</small></span><b>{reviewedCount}</b></button>
       </nav>
       <div className="sidebar-spacer"/>
       <div className="system-card"><div className={`pulse ${providersLive ? "" : "standby"}`}/><div><strong>{providersLive ? "Research enabled" : "Manual / demo mode"}</strong><small>{providersLive ? "Check Sources for health" : "Provider setup available"}</small></div></div>
       <div className="profile"><span>{profile?.username.slice(0, 2).toUpperCase() || "H"}</span><div><strong>{profile?.username || "Editor"}</strong><small>{profile?.demo ? "Local demo session" : "WordPress editor"}</small></div></div>
     </aside>
 
-    <section className="content studio-content">
+    <section className="content studio-content" id="main-content" tabIndex={-1}>
       <header className="command-bar">
         <div className="workspace-crumb"><span>HHC Studio</span><Icon name="arrow" size={12}/><strong>{meta.label}</strong></div>
         <div className="global-search"><Icon name="search" size={16}/><input ref={searchRef} value={search} onChange={event => setSearch(event.target.value)} placeholder="Search celebrity, designer, event…" aria-label="Search outfits"/>{search ? <button type="button" onClick={() => setSearch("")} aria-label="Clear search"><Icon name="close" size={13}/></button> : <kbd>/</kbd>}</div>
         <div className="command-actions">
           <button type="button" className="icon-button" onClick={() => void load(true)} title="Refresh" disabled={refreshing}><Icon name="refresh"/></button>
-          <button type="button" className="source-import-button" onClick={() => setShowIntake(true)}><Icon name="link"/><span>Import post URL</span></button>
+          <button type="button" className="source-import-button" aria-label="Import post URL" title="Import post URL" onClick={() => setShowIntake(true)}><Icon name="link"/><span>Import post URL</span></button>
           <button type="button" className="primary" onClick={() => void runAutomation()} disabled={automationBusy} title="Run daily automation" aria-label="Run daily automation"><Icon name={automationBusy ? "refresh" : "spark"}/><span>{automationBusy ? "Building drafts…" : "Run daily automation"}</span></button>
           <button type="button" className="header-logout-button" onClick={logout} title="Log out and use different credentials" aria-label="Log out and return to credential entry"><Icon name="logout" size={16}/><span>Log out</span></button>
         </div>
       </header>
 
-      <EditorialDesk selected={selected} onRefresh={() => { if (showCollageEditor || showIntake || decisionMode) return; if (selected) void openCase(selected.id); void load(); }}/>
-      {selected?.demo_data && <p className="edition-message">Demonstration case and placeholder photographs. Connect a source in Sources &amp; schedule to prepare real editorial images.</p>}
-      <p className="edition-message">Showing posts published today and yesterday (Asia/Kolkata). Men and Both show matching posts from the same dates; older looks remain in the research archive.</p>
       <header className="editorial-header studio-hero">
         <div className="header-rail"><span>{meta.short} / {editionCode}</span><i/><span>{dateLabel}</span></div>
-        <div className="hero-row"><div><div className="eyebrow"><span/>Reddit + editor-selected public posts</div><h1>{meta.title} <em>{meta.accent}</em></h1><p>{meta.description}</p></div><div className="hero-seal"><span>{visibleCases.length.toString().padStart(2, "0")}</span><small>Visible<br/>outfits</small></div></div>
+        <div className="hero-row">
+          <div className="hero-copy"><div className="eyebrow">HIGH HEEL CONFIDENTIAL / EDITORIAL</div><h1>{meta.title}</h1><p className="hero-deck">{meta.accent}</p><p>{meta.description}</p><a className="hero-explore" href="#daily-looks">Explore this edit <Icon name="arrow" size={15}/></a></div>
+        </div>
       </header>
 
-      <section className={`provider-strip ${providersLive ? "is-live" : "is-demo"}`} aria-label="Research provider status">
-        <div className="provider-summary"><span className="provider-icon"><Icon name={providersLive ? "spark" : "clock"} size={17}/></span><div><small>Research environment</small><strong>{providersLive ? "Live intelligence" : "Curated demonstration"}</strong></div></div>
-        <p>{providersLive ? "Reddit discovery and editor-selected public URL imports share title-and-description extraction, archive matching and draft collage rendering." : "The automated Reddit provider is waiting for configuration; public URL intake remains editor initiated."}</p>
-        <div className="provider-stages"><span className={providersLive ? "ready" : "waiting"}><i/>Reddit intake<small>{providersLive ? "Automatic" : "Waiting"}</small></span><span className={providersLive ? "ready" : "waiting"}><i/>Look extraction<small>{providersLive ? "Automatic" : "Waiting"}</small></span><span className={providersLive ? "ready" : "waiting"}><i/>Archive search<small>{providersLive ? "Local archive" : "Waiting"}</small></span><span className="ready"><i/>Collage studio<small>Automatic</small></span></div>
-      </section>
-
       <section className="metrics" aria-label="Editorial summary">
-        <article><span className="metric-number">01</span><div><small>Outfit cases</small><strong>{dashboard?.total ?? "—"}</strong><span>Current edition</span></div></article>
-        <article><span className="metric-number">02</span><div><small>Pending review</small><strong>{pendingCount}</strong><span>Needs a decision</span></div></article>
-        <article><span className="metric-number">03</span><div><small>Reviewed</small><strong>{reviewedCount}</strong><span>Approved or closed</span></div></article>
+        <article><span className="metric-number" aria-hidden="true"><Icon name="grid" size={18}/></span><div><small>Outfit cases</small><strong>{dashboard?.total ?? "—"}</strong><span>Current edition</span></div></article>
+        <article><span className="metric-number" aria-hidden="true"><Icon name="clock" size={18}/></span><div><small>Pending review</small><strong>{loading ? "—" : pendingCount}</strong><span>Needs a decision</span></div></article>
+        <article><span className="metric-number" aria-hidden="true"><Icon name="check" size={18}/></span><div><small>Reviewed</small><strong>{loading ? "—" : reviewedCount}</strong><span>Approved or closed</span></div></article>
         <article className="guardrail"><div className="guardrail-orbit"><Icon name="shield" size={18}/></div><span>Editorial promise</span><strong>Human taste. Machine speed.</strong><small>Nothing publishes without your final word.</small></article>
       </section>
 
-      <section className="workspace studio-workspace">
+      <EditorialDesk selected={selected} onRefresh={() => { if (showCollageEditor || showIntake || decisionMode) return; if (selected) void openCase(selected.id); void load(); }}/>
+      {selected?.demo_data && <p className="edition-message">Demonstration case and placeholder photographs. Connect a source in Sources &amp; schedule to prepare real editorial images.</p>}
+      <div className="workbench-heading"><div><span className="workbench-kicker">THE EDITORIAL DESK</span><h2>The working edit.</h2></div><p>Today &amp; yesterday · Asia/Kolkata<span>Choose a look. Refine the details. Shape the story.</span></p></div>
+      <section className="workspace studio-workspace" id="daily-looks" tabIndex={-1} aria-label="Daily looks">
         <div className="queue-panel">
           <div className="panel-heading"><div><small>{meta.listKicker}</small><h2>{meta.listTitle}</h2></div><span className="queue-count">{visibleCases.length.toString().padStart(2, "0")}</span></div>
-          <div className="filters">{FILTERS[workspaceView].map(item => <button type="button" key={item} className={filter === item ? "selected" : ""} onClick={() => setFilter(item)}>{item === "all" ? "All" : pretty(item)}</button>)}</div>
+          <div className="filters" role="group" aria-label="Filter outfits">{FILTERS[workspaceView].map(item => <button type="button" key={item} aria-pressed={filter === item} className={filter === item ? "selected" : ""} onClick={() => setFilter(item)}>{item === "all" ? "All" : pretty(item)}</button>)}</div>
           <div className="case-list">
-            {loading && <div className="loading-card"><i/><span>Preparing the edit…</span></div>}
-            {!loading && visibleCases.map((item, index) => <button type="button" key={item.id} className={`case-card ${selected?.id === item.id ? "current" : ""}`} onClick={() => void openCase(item.id)}>
+            {loadError && <div className="queue-error" role="alert"><Icon name="refresh"/><strong>Your edit is temporarily unavailable</strong><p>{loadError}</p><button type="button" className="ghost" disabled={refreshing || loading} onClick={() => void load(true)}>{refreshing ? "Retrying…" : "Try again"}</button></div>}
+            {loading && <div className="queue-loading" role="status"><span>Preparing your edit…</span>{[0, 1, 2].map(index => <div className="skeleton-case" key={index} aria-hidden="true"><i/><div><b/><b/><b/></div></div>)}</div>}
+            {!loading && visibleCases.map((item, index) => <button type="button" key={item.id} aria-pressed={selected?.id === item.id} className={`case-card ${selected?.id === item.id ? "current" : ""}`} onClick={() => void openCase(item.id)}>
               <span className="case-index">{(index + 1).toString().padStart(2, "0")}</span><div className="case-thumb"><img src={asset(item.base_image)} alt={`${item.celebrity} in ${item.designer}`}/></div>
               <div className="case-copy"><div><StatusPill status={item.status}/><span className={`fashion-chip fashion-${item.fashion_category}`}>{fashionCategoryLabel(item.fashion_category)}</span><span className={`risk risk-${item.risk_level}`}>{item.risk_level}</span></div><strong>{item.celebrity}</strong><p>{item.designer} · {item.event_name}</p><footer><span>{item.event_date || "Date unresolved"}</span><b>{Math.round(item.confidence * 100)}% signal</b></footer></div><Icon name="arrow" size={15}/>
             </button>)}
-            {!loading && !visibleCases.length && <div className="empty enhanced-empty"><Icon name="search"/><strong>No recent outfits in this view</strong><span>No matching posts from today or yesterday have been collected. Clear filters or run daily automation to check for new posts.</span><button type="button" className="ghost" onClick={() => { setSearch(""); setFilter("all"); }}>Reset view</button></div>}
+            {!loading && !loadError && !visibleCases.length && <div className="empty enhanced-empty"><Icon name="search"/><strong>{search ? "No looks match your search" : "A fresh edit starts here"}</strong><span>{search ? "Try another celebrity, designer or event, or clear your filters." : "No recent looks in this view yet. Import a public post or check another fashion desk."}</span><button type="button" className="ghost" onClick={() => { setSearch(""); setFilter("all"); }}>Reset view</button></div>}
           </div>
         </div>
 
         <div className="review-panel">
           {!selected ? <div className="review-empty"><span>HHC</span><h2>No outfit selected</h2><p>Choose a look from the rail to open its editorial file.</p></div> : <>
-            <div className="review-heading"><div><div className="review-meta"><StatusPill status={selected.status}/><span className={`fashion-chip fashion-${selected.fashion_category}`}>{selected.fashion_category === "unclassified" ? "Content desk open" : fashionCategoryLabel(selected.fashion_category)}</span>{selected.demo_data && <span className="demo-chip">Demonstration</span>}</div><h2>{selected.celebrity}</h2><p><b>{selected.designer}</b><i/>{selected.event_name}</p></div><div className="review-heading-actions"><div className="category-editor"><small>Content listing</small><div>{(["women", "men", "mixed"] as const).map(category => <button type="button" key={category} className={selected.fashion_category === category ? "active" : ""} onClick={() => void updateFashionCategory(category)} disabled={categoryBusy}>{category === "mixed" ? "Both" : pretty(category)}</button>)}</div></div><a className="source-link" href={selected.permalink} target="_blank" rel="noreferrer"><Icon name="external"/>{selected.source_type === "reddit_rss" ? "Reddit source" : "Public source"}</a></div></div>
+            <div className="review-heading"><div className="review-identity"><img className="review-portrait" src={asset(selected.base_image)} alt=""/><div><div className="review-meta"><StatusPill status={selected.status}/><span className={`fashion-chip fashion-${selected.fashion_category}`}>{selected.fashion_category === "unclassified" ? "Content desk open" : fashionCategoryLabel(selected.fashion_category)}</span>{selected.demo_data && <span className="demo-chip">Demonstration</span>}</div><h2>{selected.celebrity}</h2><p>{selected.event_name}</p></div></div><div className="review-heading-actions"><div className="category-editor"><small>Content listing</small><div>{(["women", "men", "mixed"] as const).map(category => <button type="button" key={category} className={selected.fashion_category === category ? "active" : ""} onClick={() => void updateFashionCategory(category)} disabled={categoryBusy}>{category === "mixed" ? "Both" : pretty(category)}</button>)}</div></div><a className="source-link" href={selected.permalink} target="_blank" rel="noreferrer"><Icon name="external"/>{selected.source_type === "reddit_rss" ? "Reddit source" : "Public source"}</a></div></div>
+            <dl className="look-facts"><div><dt>Designer</dt><dd>{selected.designer}</dd></div><div><dt>Appearance</dt><dd>{selected.event_date || "Date to verify"}</dd></div><div><dt>Discovery signal</dt><dd>{Math.round(selected.confidence * 100)}%<span>Not editorial verification</span></dd></div></dl>
 
             <OutfitContext key={selected.id} selected={selected} onSaved={() => void openCase(selected.id)}/>
             {candidate && <MatchVerification key={candidate.id} candidateId={candidate.id} currentDate={selected.event_date} earlierDate={candidate.event_date} onVerified={() => void openCase(selected.id)}/>}
@@ -1396,6 +1397,15 @@ export default function DashboardPage() {
           </>}
         </div>
       </section>
+      <details className="provider-details">
+      <summary><Icon name="spark" size={16}/><strong>Research connections</strong><span>View intake &amp; processing stages</span><Icon name="arrow" size={14}/></summary>
+      <section className={`provider-strip ${providersLive ? "is-live" : "is-demo"}`} aria-label="Research provider status">
+        <div className="provider-summary"><span className="provider-icon"><Icon name={providersLive ? "spark" : "clock"} size={17}/></span><div><small>Research environment</small><strong>{providersLive ? "Live intelligence" : "Curated demonstration"}</strong></div></div>
+        <p>{providersLive ? "Reddit discovery and editor-selected public URL imports share title-and-description extraction, archive matching and draft collage rendering." : "The automated Reddit provider is waiting for configuration; public URL intake remains editor initiated."}</p>
+        <div className="provider-stages"><span className={providersLive ? "ready" : "waiting"}><i/>Reddit intake<small>{providersLive ? "Automatic" : "Waiting"}</small></span><span className={providersLive ? "ready" : "waiting"}><i/>Look extraction<small>{providersLive ? "Automatic" : "Waiting"}</small></span><span className={providersLive ? "ready" : "waiting"}><i/>Archive search<small>{providersLive ? "Local archive" : "Waiting"}</small></span><span className="ready"><i/>Collage studio<small>Automatic</small></span></div>
+      </section>
+      </details>
+
       <footer className="page-footer"><span>High Heel Confidential</span><i/>Editorial research, accelerated.</footer>
     </section>
 

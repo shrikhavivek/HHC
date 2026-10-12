@@ -1,0 +1,664 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>High Heel Confidential - Outfit Research System: Current State, Implementation and Roadmap</title>
+  <style>
+    @page { size: A4; margin: 20mm 18mm 20mm 18mm; }
+    body {
+      font-family: "Aptos", "Segoe UI", Arial, sans-serif;
+      color: #292326;
+      font-size: 10.5pt;
+      line-height: 1.48;
+      margin: 0;
+    }
+    h1, h2, h3, h4 { color: #5a1833; page-break-after: avoid; }
+    h1 { font-family: Georgia, serif; font-size: 28pt; line-height: 1.12; margin: 0 0 12pt; }
+    h2 { font-family: Georgia, serif; font-size: 20pt; border-bottom: 1.5pt solid #c7a87a; padding-bottom: 5pt; margin-top: 20pt; }
+    h3 { font-size: 13.5pt; margin: 16pt 0 6pt; }
+    h4 { font-size: 11pt; margin: 12pt 0 4pt; }
+    p { margin: 0 0 8pt; }
+    ul, ol { margin: 4pt 0 10pt 20pt; }
+    li { margin-bottom: 4pt; }
+    a { color: #6e2144; text-decoration: underline; }
+    table { width: 100%; border-collapse: collapse; margin: 8pt 0 14pt; page-break-inside: avoid; }
+    th { background: #5a1833; color: white; text-align: left; padding: 7pt; font-size: 9.5pt; }
+    td { border: 0.7pt solid #d9d0cb; padding: 7pt; vertical-align: top; font-size: 9.5pt; }
+    tr:nth-child(even) td { background: #faf7f3; }
+    code, pre { font-family: Consolas, "Courier New", monospace; }
+    code { color: #5a1833; background: #f5efe9; padding: 1pt 3pt; }
+    pre {
+      background: #241d20;
+      color: #fffaf4;
+      border-left: 5pt solid #c7a87a;
+      padding: 10pt;
+      font-size: 8.8pt;
+      line-height: 1.35;
+      white-space: pre-wrap;
+      page-break-inside: avoid;
+    }
+    .cover {
+      min-height: 245mm;
+      background: #5a1833;
+      color: #fffaf4;
+      padding: 25mm 18mm;
+      box-sizing: border-box;
+      page-break-after: always;
+    }
+    .cover .mark { font-family: Georgia, serif; font-size: 15pt; letter-spacing: 3pt; color: #e4c99d; }
+    .cover h1 { color: white; font-size: 34pt; margin-top: 45mm; }
+    .cover h1 em { color: #e4c99d; font-weight: normal; }
+    .cover .subtitle { font-size: 15pt; max-width: 125mm; color: #f4e7dd; }
+    .cover .rule { width: 38mm; height: 2pt; background: #e4c99d; margin: 20pt 0; }
+    .cover .meta { margin-top: 55mm; font-size: 10pt; color: #eadbd1; }
+    .page-break { page-break-before: always; }
+    .callout {
+      border-left: 5pt solid #c7a87a;
+      background: #f7f0e7;
+      padding: 10pt 12pt;
+      margin: 10pt 0 14pt;
+      page-break-inside: avoid;
+    }
+    .warning { border-left-color: #a33d39; background: #fff1ee; }
+    .success { border-left-color: #39745a; background: #eef8f2; }
+    .status { font-weight: bold; }
+    .implemented { color: #246547; }
+    .conditional { color: #93631d; }
+    .pending { color: #9a3434; }
+    .small { font-size: 8.8pt; color: #645b5f; }
+    .toc li { margin-bottom: 6pt; }
+    .flow {
+      border: 1pt solid #c7a87a;
+      background: #fffaf4;
+      text-align: center;
+      padding: 12pt;
+      font-weight: bold;
+      color: #5a1833;
+      letter-spacing: .2pt;
+    }
+    .kpi td { text-align: center; width: 25%; }
+    .kpi strong { display: block; font-size: 17pt; color: #5a1833; }
+    .footer-note { margin-top: 24pt; border-top: 1pt solid #d7ccc4; padding-top: 7pt; font-size: 8.5pt; color: #6d6367; }
+  </style>
+</head>
+<body>
+  <section class="cover">
+    <div class="mark">HHC &nbsp; / &nbsp; EDITORIAL TECHNOLOGY</div>
+    <h1>High Heel Confidential<br><em>Outfit Research System</em></h1>
+    <div class="rule"></div>
+    <p class="subtitle">Current-state implementation guide, operating model, Reddit credential setup and production roadmap</p>
+    <div class="meta">
+      <p><strong>Prepared:</strong> 5 October 2026</p>
+      <p><strong>Workspace:</strong> C:\Users\shrikha\Desktop\Demo</p>
+      <p><strong>Document status:</strong> Implementation audit / working roadmap</p>
+      <p><strong>Audience:</strong> Product owner, editorial team and implementation partner</p>
+    </div>
+  </section>
+
+  <h2>Document purpose</h2>
+  <p>This document explains exactly what the current High Heel Confidential outfit-research application does, how it has been implemented, which capabilities depend on external credentials, what is not yet production-ready, and how to obtain and configure Reddit OAuth credentials if automated Reddit search is approved.</p>
+  <div class="callout">
+    <strong>Important status statement.</strong> The application can run without Reddit OAuth credentials. In that mode it uses anonymous Reddit JSON/RSS access, local archive matching and manual URL imports. Anonymous Reddit access is inherently rate-limited and cannot provide dependable historical search. The code already contains an optional OAuth path, but valid credentials must be obtained from a registered Reddit application and successfully validated before that path is considered operational.
+  </div>
+
+  <h2>Contents</h2>
+  <ol class="toc">
+    <li><a href="#summary">Executive summary</a></li>
+    <li><a href="#status">Current capability status</a></li>
+    <li><a href="#architecture">System architecture</a></li>
+    <li><a href="#workflow">End-to-end workflow</a></li>
+    <li><a href="#matching">Historical outfit matching</a></li>
+    <li><a href="#collage">Collage creation and editing</a></li>
+    <li><a href="#editorial">Editorial, archive and rights workflow</a></li>
+    <li><a href="#security">Login, security and data storage</a></li>
+    <li><a href="#without-oauth">Operation without Reddit credentials</a></li>
+    <li><a href="#reddit-oauth">How to obtain and configure Reddit credentials</a></li>
+    <li><a href="#operations">Daily operating procedure</a></li>
+    <li><a href="#limitations">Known limitations and risks</a></li>
+    <li><a href="#roadmap">Production roadmap</a></li>
+    <li><a href="#implementation-map">Implementation map</a></li>
+    <li><a href="#reference">Configuration and API reference</a></li>
+  </ol>
+
+  <h2 id="summary" class="page-break">1. Executive summary</h2>
+  <p>The current product is a local, Docker-based editorial research and collage application. Its primary source is <strong>r/BollywoodFashion</strong>. It can also accept editor-selected public URLs and editor-uploaded images. The product is designed to generate draft collages while preserving a human editorial decision before any historical outfit claim is treated as approved.</p>
+
+  <table class="kpi">
+    <tr>
+      <td><strong>3</strong>Docker services</td>
+      <td><strong>2</strong>Instagram canvas formats</td>
+      <td><strong>3</strong>Collage layout templates</td>
+      <td><strong>52</strong>API tests in the latest verified run</td>
+    </tr>
+  </table>
+
+  <h3>What the system already provides</h3>
+  <ul>
+    <li>A professional High Heel Confidential login and editorial dashboard.</li>
+    <li>Daily intake from <code>r/BollywoodFashion</code>, including pagination by source date and image-gallery extraction.</li>
+    <li>Women, Men and Both content listings, sorted newest post first.</li>
+    <li>Filtering of anonymous advertisements and campaigns where no individual is identified.</li>
+    <li>Metadata extraction from titles, descriptions, gallery captions and known social handles.</li>
+    <li>Local archive matching and optional all-time Reddit search.</li>
+    <li>Strict exact-outfit matching rules designed to reduce false comparisons.</li>
+    <li>Automatic source-only collages when no historical match is defensible.</li>
+    <li>Editable portrait and landscape Instagram collages with three layouts.</li>
+    <li>Manual image upload, reordering, resizing, freeform crop selection and image adjustments.</li>
+    <li>Optional HHC watermark upload, movement, independent width/height resize, tilt, opacity and filters.</li>
+    <li>Panel-level archive and rights information, editorial decisions and audit events.</li>
+    <li>Downloadable PNG/WebP output, JSON manifest, source record and ZIP evidence bundle.</li>
+  </ul>
+
+  <h3>What is not complete</h3>
+  <ul>
+    <li>Valid Reddit OAuth access has not been proven until Reddit accepts an issued client ID and secret.</li>
+    <li>WordPress draft creation and publishing are intentionally disabled; only WordPress credential validation is implemented.</li>
+    <li>Instagram account/API ingestion is not implemented. Public URL import is metadata-based and can fail on login-gated posts.</li>
+    <li>The image matcher is a conservative histogram and perceptual-hash implementation, not a fashion-trained vision model.</li>
+    <li>Image rights clearance is not automated. The system records evidence and requires editorial review.</li>
+    <li>The application is local, not a hosted production service. It has no external task queue, managed object storage, production SSO or monitoring stack.</li>
+  </ul>
+
+  <h2 id="status" class="page-break">2. Current capability status</h2>
+  <table>
+    <tr><th>Capability</th><th>Status</th><th>Current implementation</th><th>Dependency / caveat</th></tr>
+    <tr><td>Local application</td><td class="status implemented">Implemented</td><td>Docker Compose starts PostgreSQL, FastAPI and Next.js.</td><td>Runs on the local computer unless deployed.</td></tr>
+    <tr><td>Temporary login</td><td class="status implemented">Implemented</td><td>Configurable demo username/password creates an eight-hour signed session.</td><td>Must be disabled before production.</td></tr>
+    <tr><td>WordPress login validation</td><td class="status conditional">Credential-dependent</td><td>Checks a WordPress username and Application Password through <code>/wp-json/wp/v2/users/me</code>.</td><td>Does not publish a post.</td></tr>
+    <tr><td>Daily Reddit intake</td><td class="status conditional">Implemented with external dependency</td><td>Fetches the selected date from <code>r/BollywoodFashion</code>, paginating until the day boundary.</td><td>Anonymous access may be throttled; OAuth is preferred.</td></tr>
+    <tr><td>Reddit OAuth</td><td class="status conditional">Code implemented; credentials pending</td><td>Application-only token exchange, in-memory token cache, authenticated JSON calls and retry handling.</td><td>Requires an approved/registered Reddit client ID and secret.</td></tr>
+    <tr><td>Public URL import</td><td class="status implemented">Implemented</td><td>Supports allowed public Instagram, Threads, Facebook, X, Pinterest, TikTok, YouTube and Reddit URLs.</td><td>Private/login-gated pages are rejected or may expose only a cover image.</td></tr>
+    <tr><td>Ad exclusion</td><td class="status implemented">Implemented</td><td>Rejects anonymous brand/campaign creative while retaining campaigns with an identified person.</td><td>Heuristic; editor correction remains available.</td></tr>
+    <tr><td>Metadata extraction</td><td class="status implemented">Implemented</td><td>Rule-based parsing of celebrity, designer and event using titles, descriptions and aliases.</td><td>Not an LLM; ambiguous posts enter context review.</td></tr>
+    <tr><td>Women / Men / Both classification</td><td class="status implemented">Implemented</td><td>Heuristic classification with manual correction stored on the case.</td><td>Group posts may still require review.</td></tr>
+    <tr><td>Historical matching</td><td class="status conditional">Implemented, quality-limited</td><td>All-time local archive search plus optional remote Reddit search; strict text, garment and image gates.</td><td>Recall is limited by archive size, metadata quality and basic visual descriptors.</td></tr>
+    <tr><td>Automatic collage</td><td class="status implemented">Implemented</td><td>Creates an automatic draft from every usable same-post image and accepted evidence.</td><td>Never auto-publishes.</td></tr>
+    <tr><td>Collage editor</td><td class="status implemented">Implemented</td><td>Panel reorder/removal/addition, manual crop, resizing, layouts, filters and watermark controls.</td><td>Browser preview and server render share saved normalized values.</td></tr>
+    <tr><td>Evidence bundle</td><td class="status implemented">Implemented</td><td>PNG, WebP, unadjusted source preview, manifest, source Markdown and ZIP.</td><td>Source records do not confer image publishing rights.</td></tr>
+    <tr><td>WordPress draft publishing</td><td class="status pending">Not implemented</td><td>Feature flag is hard-disabled and guarded at application startup.</td><td>Requires a separate approved implementation phase.</td></tr>
+    <tr><td>Production hosting</td><td class="status pending">Not implemented</td><td>Current stack is local Docker Compose.</td><td>Requires hosting, secrets, storage, backups, monitoring and hardened authentication.</td></tr>
+  </table>
+
+  <h2 id="architecture" class="page-break">3. System architecture</h2>
+  <div class="flow">Reddit / editor-selected URLs / uploads &nbsp;&rarr;&nbsp; FastAPI ingestion and research &nbsp;&rarr;&nbsp; PostgreSQL + media volume &nbsp;&rarr;&nbsp; Pillow collage renderer &nbsp;&rarr;&nbsp; Next.js editorial dashboard &nbsp;&rarr;&nbsp; evidence bundle / future WordPress draft</div>
+
+  <h3>Runtime services</h3>
+  <table>
+    <tr><th>Service</th><th>Technology</th><th>Local address</th><th>Responsibility</th></tr>
+    <tr><td><code>web</code></td><td>Next.js / React / TypeScript</td><td>http://localhost:3100</td><td>Login, navigation, editorial review, collage editor and media proxy.</td></tr>
+    <tr><td><code>api</code></td><td>FastAPI / Python</td><td>http://localhost:8100</td><td>Ingestion, matching, uploads, decisions, audit, rendering and file delivery.</td></tr>
+    <tr><td><code>db</code></td><td>PostgreSQL 16</td><td>Internal Docker network</td><td>Cases, candidates, decisions, collages, audit events and job records.</td></tr>
+  </table>
+
+  <h3>Persistent storage</h3>
+  <table>
+    <tr><th>Volume</th><th>Contents</th><th>Why it matters</th></tr>
+    <tr><td><code>postgres_data</code></td><td>Structured editorial and job data.</td><td>Must be backed up with generated evidence.</td></tr>
+    <tr><td><code>media_data</code></td><td>Downloaded Reddit/public images, editor uploads and watermark files.</td><td>Rebuilding containers does not remove source media.</td></tr>
+    <tr><td><code>output_data</code></td><td>Rendered collages, manifests and ZIP bundles.</td><td>Contains deliverable editorial artifacts.</td></tr>
+  </table>
+
+  <h3>Core data model</h3>
+  <ul>
+    <li><strong>Case:</strong> one outfit story, source post, extracted identity, current image, status and JSON workflow state.</li>
+    <li><strong>Candidate:</strong> a proposed historical same-outfit appearance with scores, evidence and rights state.</li>
+    <li><strong>Decision:</strong> editor approval/rejection/research decision with written reason and editor identity.</li>
+    <li><strong>Collage:</strong> paths to rendered output, manifest and bundle for a case.</li>
+    <li><strong>AuditEvent:</strong> append-only record of meaningful editor and automation actions.</li>
+    <li><strong>JobRun:</strong> idempotent daily automation execution record.</li>
+  </ul>
+
+  <h2 id="workflow" class="page-break">4. End-to-end workflow</h2>
+  <h3>4.1 Daily automated Reddit workflow</h3>
+  <ol>
+    <li>The FastAPI scheduler waits four seconds after startup, runs the daily job once, then schedules it for the configured UTC hour/minute. The editor can also click <strong>Run daily automation</strong>.</li>
+    <li>The source date is interpreted in <code>Asia/Kolkata</code> by default.</li>
+    <li>With valid OAuth credentials, the API calls <code>oauth.reddit.com</code>. Without credentials, it tries anonymous Reddit JSON and then RSS fallback.</li>
+    <li>Listings are requested in pages of up to 100 and followed until an older local-calendar date is reached. A 50-page safety boundary prevents unbounded loops.</li>
+    <li>Posts without usable images and request/identification threads are ignored.</li>
+    <li>Gallery metadata is collected in source order, with up to 20 source images retained. Original <code>i.redd.it</code> URLs are preferred over cropped previews.</li>
+    <li>The subject policy requires an identifiable individual. Anonymous advertising, lookbook or campaign creative is excluded; a named celebrity campaign can remain eligible.</li>
+    <li>Images are downloaded and checked for minimum usable size. The parser extracts celebrity, designer and event.</li>
+    <li>A case is created once. External post ID and permalink checks make reruns idempotent.</li>
+    <li>Local archive research runs first. Remote historical Reddit research runs only if the designer is resolved and request budget is available.</li>
+    <li>An automatic draft collage is rendered even when no historical match qualifies. This prevents a failed search from blocking the daily editorial queue.</li>
+  </ol>
+
+  <h3>4.2 Editor-selected public URL workflow</h3>
+  <ol>
+    <li>The editor selects <strong>Import post URL</strong> and pastes a public URL.</li>
+    <li>The backend validates the host against an allowlist and blocks private/local network targets.</li>
+    <li>It reads public Open Graph, structured metadata, captions, author, publication date and exposed images within bounded download limits.</li>
+    <li>Optional title, description, celebrity, designer and event hints can repair sparse metadata.</li>
+    <li>The same identity, subject, archive, collage and audit workflow is applied.</li>
+    <li>Login-gated or private content is not bypassed. If only a cover is available, a one-image draft is created and the editor can upload additional rights-reviewed panels.</li>
+  </ol>
+
+  <h3>4.3 Classification and sorting</h3>
+  <p>Cases are ordered by source event/post date descending, then ingestion time. Separate Women, Men and Both sections are generated from explicit names, pronouns and category signals. The Both category is reserved for mixed-gender/group content. Editors can manually correct the category, and that correction is audited.</p>
+
+  <h3>4.4 Review state</h3>
+  <p>Pending statuses are <code>review_ready</code>, <code>context_review</code>, <code>needs_research</code> and <code>research_queued</code>. Reviewed statuses include <code>approved</code>, <code>rejected</code>, <code>auto_rejected</code> and <code>similar_not_same</code>. The system never converts an automated signal into a final editorial approval.</p>
+
+  <h2 id="matching" class="page-break">5. Historical outfit matching</h2>
+  <h3>5.1 Search scope</h3>
+  <p>Matching has no age or year cutoff. It searches the complete retained local archive and, when Reddit search is available, requests up to 100 all-time Reddit search results per outfit. The current celebrity is deliberately omitted from the remote query so that another person wearing the same outfit can be discovered.</p>
+
+  <h3>5.2 Query construction</h3>
+  <p>The query combines the primary normalized designer with garment, construction-detail, colour and selected title/description terms. Candidate posts must repeat the designer attribution before image download and scoring.</p>
+
+  <h3>5.3 Exact-match gate</h3>
+  <table>
+    <tr><th>Check</th><th>Implementation</th></tr>
+    <tr><td>Designer</td><td>Local archive matching requires canonical designer equality. Remote results must contain the expected designer term group.</td></tr>
+    <tr><td>Garment</td><td>Recognizes sari/saree, lehenga, gown, dress, suits, sherwani, bandhgala, jumpsuit, kurta, co-ord, separates and related families.</td></tr>
+    <tr><td>Colour</td><td>Normalizes major colour families and rejects explicit conflicts.</td></tr>
+    <tr><td>Construction details</td><td>Looks for embroidery, sequins, prints, lace, fabrics, draping, cut-outs, necklines, corsetry, pleats and other landmarks.</td></tr>
+    <tr><td>Text similarity</td><td>Token overlap derived from title, description, celebrity and designer context.</td></tr>
+    <tr><td>Visual similarity</td><td>68% reduced colour-histogram cosine similarity plus 32% difference-hash similarity.</td></tr>
+    <tr><td>Duplicate prevention</td><td>Rejects current permalink, already-used evidence URL, identical image and same-event reuse.</td></tr>
+  </table>
+
+  <h3>5.4 Current acceptance thresholds</h3>
+  <ul>
+    <li><strong>Same person:</strong> visual score at least 0.80 with shared garment and construction detail, or at least 0.87 with shared garment/colour and text score at least 0.14.</li>
+    <li><strong>Different celebrity:</strong> text score at least 0.16 and visual score at least 0.84 with shared garment/construction detail; an exceptional route requires visual score at least 0.92, shared garment/colour and text score at least 0.20.</li>
+    <li>Conflicting garment family or explicit colour rejects the candidate.</li>
+  </ul>
+
+  <div class="callout warning">
+    <strong>Quality limitation.</strong> The visual matcher compares the complete image. Backgrounds, poses, crops, lighting and event photography can depress a true match or inflate a visually similar but different garment. The strict thresholds intentionally favour fewer candidates over misleading collages. This explains why many cases can correctly remain source-only.
+  </div>
+
+  <h3>5.5 Evidence and approval</h3>
+  <p>Automatically discovered Reddit candidates begin as Grade D with <code>editorial_review_required</code> rights status. API approval requires Grade A/B evidence, no duplicate/same-event contradiction and a non-blocked rights status. Therefore, a candidate needs stronger editorial evidence before final approval even if automation selects it for review.</p>
+
+  <h2 id="collage" class="page-break">6. Collage creation and editing</h2>
+  <h3>6.1 Automatic draft behaviour</h3>
+  <p>The renderer always uses locally imported, source-backed images. If an exact historical match exists, it can be included with today’s image and same-post angles. If no match exists, the system creates a source-only collage from the available angles. It does not insert stock placeholders or unrelated outfits.</p>
+
+  <h3>6.2 Formats and layouts</h3>
+  <table>
+    <tr><th>Control</th><th>Available choices</th></tr>
+    <tr><td>Instagram format</td><td>Portrait 1080 &times; 1350 (4:5) and Landscape 1080 &times; 566 (1.91:1).</td></tr>
+    <tr><td>Layout</td><td>Balanced grid, Hero focus and Editorial split.</td></tr>
+    <tr><td>Panel count</td><td>Editor schema supports 1&ndash;24 selected panels; Reddit gallery intake retains up to 20 source images.</td></tr>
+    <tr><td>Panel order</td><td>Drag/reorder in the editor; at least one current-source image must remain.</td></tr>
+  </table>
+
+  <h3>6.3 Per-image controls</h3>
+  <ul>
+    <li><strong>Show full image:</strong> preserves the complete photograph and fills unused panel space with a soft background treatment.</li>
+    <li><strong>Manual crop:</strong> the editor draws, moves and resizes a freeform rectangle using corner and edge handles. Only the selected model/content area is rendered.</li>
+    <li><strong>Size weighting:</strong> panel width scale ranges from 0.65 to 1.75.</li>
+    <li><strong>Zoom/focal controls:</strong> normalized focus coordinates and zoom up to 2.5 are stored.</li>
+    <li><strong>Non-destructive operation:</strong> original source files are retained; crop and layout parameters are stored separately.</li>
+  </ul>
+
+  <h3>6.4 Uploaded images</h3>
+  <p>Editors can upload JPEG, PNG or WebP files up to 20 MB. A panel label, image credit and rights confirmation are required. A source URL is optional. Editor images remain Grade D and unverified until reviewed. A case may hold up to 12 editor uploads.</p>
+
+  <h3>6.5 HHC watermark</h3>
+  <ul>
+    <li>Transparent PNG or WebP is preferred; JPEG is also accepted.</li>
+    <li>The editor can drag, resize, change width and height independently, rotate from -180 to +180 degrees and set opacity from 5% to 100%.</li>
+    <li>Watermark width can reach 100% of the canvas; explicit height can reach 100%.</li>
+    <li>Position and size are normalized, so the full-resolution export matches the browser preview.</li>
+    <li>The watermark can be disabled, reset or replaced without modifying its source file.</li>
+  </ul>
+
+  <h3>6.6 Colour controls</h3>
+  <p>The complete collage and watermark have independent brightness, contrast, saturation and grayscale controls. The backend bounds brightness/contrast to 25&ndash;200%, saturation to 0&ndash;200%, and grayscale to 0&ndash;100%. Adjustments are reversible because a source preview and an unwatermarked base preview are retained.</p>
+
+  <h3>6.7 Output files</h3>
+  <table>
+    <tr><th>File</th><th>Purpose</th></tr>
+    <tr><td><code>collage.png</code></td><td>Full-resolution final PNG.</td></tr>
+    <tr><td><code>collage.webp</code></td><td>Optimized final WebP used by the dashboard.</td></tr>
+    <tr><td><code>collage-source.webp</code></td><td>Assembled image before collage-level filters and watermark.</td></tr>
+    <tr><td><code>collage-base.webp</code></td><td>Filtered but unwatermarked server preview.</td></tr>
+    <tr><td><code>manifest.json</code></td><td>Machine-readable outfit, source, layout, crop, filter and watermark record.</td></tr>
+    <tr><td><code>sources.md</code></td><td>Human-readable panel credits, sources, rights and layout summary.</td></tr>
+    <tr><td><code>bundle.zip</code></td><td>Download package containing final images, source preview, manifest and source record.</td></tr>
+  </table>
+
+  <h2 id="editorial" class="page-break">7. Editorial, archive and rights workflow</h2>
+  <h3>Dashboard workspaces</h3>
+  <ul>
+    <li><strong>Today’s edit:</strong> complete current working edition.</li>
+    <li><strong>Women’s fashion:</strong> women-only cases.</li>
+    <li><strong>Men’s fashion:</strong> men-only cases.</li>
+    <li><strong>Both fashion:</strong> mixed-gender/group cases.</li>
+    <li><strong>Pending review:</strong> cases awaiting context, research or a decision.</li>
+    <li><strong>Reviewed:</strong> approved and closed decisions.</li>
+  </ul>
+
+  <h3>Archive and rights information</h3>
+  <p>The fashion archive and rights desk are presented inside the collage workspace. Every panel can expose its publisher, source URL, credit, retrieval date, source grade, exact-match flag and rights status. Assets marked <code>do_not_use</code> are blocked from rendering.</p>
+
+  <h3>Decision controls</h3>
+  <p>Editors can approve, reject, mark similar-not-same or request more research. A written reason of at least 12 characters is required. Decisions and subsequent collage edits create audit events.</p>
+
+  <div class="callout">
+    <strong>Rights principle.</strong> A URL, a Reddit post or an official designer page is evidence of provenance, not a publication licence. Final credit and image-use permission remain an HHC editorial/legal responsibility.
+  </div>
+
+  <h2 id="security" class="page-break">8. Login, security and data storage</h2>
+  <h3>8.1 Login</h3>
+  <p>The polished login page supports two modes:</p>
+  <ul>
+    <li><strong>Temporary demo login:</strong> enabled by Docker defaults for local testing. The current default is <code>hhc-demo</code> with the configured demo password. This must be disabled for deployment.</li>
+    <li><strong>WordPress validation:</strong> submits the username and WordPress Application Password to the HHC WordPress REST <code>users/me</code> endpoint. The application does not store that password in the database.</li>
+  </ul>
+  <p>On success, Next.js creates an HMAC-signed, HTTP-only, SameSite=Strict session cookie with an eight-hour lifetime. The dashboard logout action deletes the session and returns the user to credential entry.</p>
+
+  <h3>8.2 API protection</h3>
+  <p>Mutation endpoints require an editor API key. The Next.js backend proxy is expected to add this key server-side. However, read endpoints and media URLs are directly reachable on local API port 8100. Production deployment must place the API behind authenticated routing and should not expose this port publicly.</p>
+
+  <h3>8.3 Secrets</h3>
+  <ul>
+    <li>The local <code>.env</code> file is ignored by Git.</li>
+    <li>Reddit passwords must never be stored. Only OAuth client ID/secret are supported.</li>
+    <li>Production secrets should move to a managed secret store.</li>
+    <li><code>SESSION_SECRET</code> must be at least 32 characters.</li>
+    <li><code>EDITOR_API_KEY</code> must be replaced with a long random value.</li>
+  </ul>
+
+  <h2 id="without-oauth" class="page-break">9. Operation without Reddit credentials</h2>
+  <p>To operate without OAuth, leave both values genuinely empty:</p>
+  <pre>REDDIT_CLIENT_ID=
+REDDIT_CLIENT_SECRET=</pre>
+  <p>Do not enter placeholders, a Reddit username or a Reddit password. The configuration validator requires both fields together; one field alone prevents startup.</p>
+
+  <h3>What still works</h3>
+  <ul>
+    <li>Dashboard, login, database, images already downloaded and all collage-editing functions.</li>
+    <li>Local archive matching across retained cases.</li>
+    <li>Manual Reddit URL intake and public URL import.</li>
+    <li>Anonymous daily listing attempts and same-post image extraction when Reddit permits them.</li>
+    <li>Editor uploads, watermarking, filters and evidence bundles.</li>
+  </ul>
+
+  <h3>What becomes unreliable</h3>
+  <ul>
+    <li>Complete daily intake can fail or fall back from JSON to RSS.</li>
+    <li>Anonymous historical Reddit search may return HTTP 429 or be blocked.</li>
+    <li>The anonymous daily remote-search budget is eight cases per run.</li>
+    <li>Reddit HTML challenges can prevent complete gallery recovery.</li>
+  </ul>
+
+  <div class="callout warning">
+    <strong>Known UI issue.</strong> The current dashboard maps every remote-search <code>unavailable</code> result to a “Reddit is rate-limiting” message. An invalid OAuth credential can therefore be mislabeled as a rate limit. The stored <code>archive_search.error</code> is the authoritative diagnostic until the UI status mapping is improved.
+  </div>
+
+  <h2 id="reddit-oauth" class="page-break">10. How to obtain and configure Reddit credentials</h2>
+  <div class="callout">
+    <strong>These are not personal login credentials.</strong> You can be the product owner, client and Reddit account owner, but the backend still uses a separate Reddit-issued application client ID and client secret. Your Reddit password is never required.
+  </div>
+
+  <h3>10.1 What the current code expects</h3>
+  <p>The backend uses the OAuth <code>client_credentials</code> flow for read-only application access. It exchanges the client ID and secret at Reddit’s access-token endpoint, caches the short-lived bearer token in memory, and sends API requests to <code>https://oauth.reddit.com</code>. A 401 triggers token invalidation/retry; a 429 follows bounded rate-limit backoff.</p>
+
+  <h3>10.2 Reddit policy context</h3>
+  <ul>
+    <li>Reddit requires automated Data API clients to authenticate with a registered OAuth token.</li>
+    <li>Reddit currently documents 100 queries per minute per OAuth client ID, averaged over a ten-minute window, for eligible free access.</li>
+    <li>Reddit can require review or a separate agreement, especially for commercial use.</li>
+    <li>Deleted Reddit content and user-identifying information must be removed from retained data.</li>
+    <li>Rate limits and access controls must not be bypassed.</li>
+  </ul>
+
+  <h3>10.3 Prepare the request</h3>
+  <p>Before registering, prepare an accurate use-case description:</p>
+  <ul>
+    <li><strong>Owner:</strong> High Heel Confidential / the named account owner.</li>
+    <li><strong>Purpose:</strong> read-only editorial discovery of public celebrity-fashion posts.</li>
+    <li><strong>Community:</strong> <code>r/BollywoodFashion</code>.</li>
+    <li><strong>Data:</strong> post title, public description/caption, publication timestamp, permalink, public author attribution and public image URLs.</li>
+    <li><strong>Output:</strong> internal editorial research cases and draft collages; no automated Reddit posting or moderation.</li>
+    <li><strong>Volume:</strong> daily listing pages plus bounded all-time outfit queries, below the documented client limit.</li>
+    <li><strong>Retention:</strong> source/evidence retention subject to Reddit deletion and rights policies.</li>
+    <li><strong>Commercial disclosure:</strong> state honestly that the tool supports an editorial blog.</li>
+  </ul>
+
+  <h3>10.4 Request access where required</h3>
+  <ol>
+    <li>Read Reddit’s current Data API guidance and Responsible Builder requirements.</li>
+    <li>Open the Reddit API support form:
+      <a href="https://support.reddithelp.com/hc/en-us/requests/new?ticket_form_id=14868593862164">https://support.reddithelp.com/hc/en-us/requests/new?ticket_form_id=14868593862164</a>.
+    </li>
+    <li>Select the API/developer access route that matches the product. Reddit’s form advises developers to consider Devvit first and use the request form when the use case is not supported there.</li>
+    <li>Provide the prepared use case, Reddit username, company/site information, expected volume, data handling and benefit/purpose.</li>
+    <li>Retain Reddit’s approval or follow-up correspondence with the project record.</li>
+  </ol>
+
+  <h3>10.5 Create the OAuth application</h3>
+  <ol>
+    <li>Sign in to the Reddit account that will own the integration.</li>
+    <li>Open <a href="https://www.reddit.com/prefs/apps">https://www.reddit.com/prefs/apps</a>.</li>
+    <li>At the bottom, choose <strong>create an app</strong> / <strong>create another app</strong>.</li>
+    <li>Use a descriptive name such as <strong>HHC Outfit Research</strong>.</li>
+    <li>Choose a confidential type that supplies a secret. For this server-side backend, <strong>web app</strong> is the clearest choice. A personal script may also be confidential, but an installed app does not provide the secret expected by the current implementation.</li>
+    <li>Suggested description: “Read-only internal editorial tool for discovering public celebrity-fashion posts and preparing human-reviewed draft collages.”</li>
+    <li>Suggested About URL: <code>https://www.highheelconfidential.com/</code>.</li>
+    <li>Suggested local Redirect URI: <code>http://localhost:3100/reddit/callback</code>. The current application-only flow does not use an interactive callback, but Reddit’s registration form may require a value.</li>
+    <li>Create the application.</li>
+  </ol>
+
+  <h3>10.6 Copy the correct values</h3>
+  <table>
+    <tr><th>Environment field</th><th>Correct Reddit value</th><th>Do not use</th></tr>
+    <tr><td><code>REDDIT_CLIENT_ID</code></td><td>The short application identifier displayed on the app card, normally beneath the app name/type.</td><td>App display name, Reddit username or email.</td></tr>
+    <tr><td><code>REDDIT_CLIENT_SECRET</code></td><td>The value explicitly labelled <strong>secret</strong>.</td><td>Reddit account password.</td></tr>
+    <tr><td><code>REDDIT_USER_AGENT</code></td><td>A descriptive identifier including the owning Reddit username.</td><td>A generic Python/requests user agent or a false identity.</td></tr>
+  </table>
+
+  <h3>10.7 Configure the local application</h3>
+  <p>Open <code>C:\Users\shrikha\Desktop\Demo\.env</code> and add:</p>
+  <pre>REDDIT_CLIENT_ID=the-issued-application-client-id
+REDDIT_CLIENT_SECRET=the-issued-application-secret
+REDDIT_USER_AGENT=windows:hhc-outfit-research:v1.0 (by /u/YOUR_REDDIT_USERNAME)
+REDDIT_OAUTH_DAILY_SEARCH_BUDGET=80</pre>
+  <p>Do not wrap values in placeholder brackets. Do not commit the file. Restart only the API when values change:</p>
+  <pre>cd C:\Users\shrikha\Desktop\Demo
+docker compose up -d --force-recreate api</pre>
+
+  <h3>10.8 Validate credentials safely</h3>
+  <p>The current <code>/health</code> response only checks whether both variables are non-empty. It does not prove that Reddit accepted them. Use this local command; it prints only a success message, never the token:</p>
+  <pre>docker compose run --rm --no-deps api python -c "from app.config import get_settings; from app.automation import _reddit_oauth_token; s=get_settings(); _reddit_oauth_token(s.reddit_client_id,s.reddit_client_secret,s.reddit_user_agent); print('Reddit OAuth validated')"</pre>
+  <p>Expected output:</p>
+  <pre>Reddit OAuth validated</pre>
+  <p>If it returns <code>401 Unauthorized</code>, verify that the application identifier and labelled secret were copied correctly and that the selected app type provides a secret. Do not substitute personal login credentials.</p>
+
+  <h3>10.9 Functional proof</h3>
+  <ol>
+    <li>Open the dashboard and run daily automation for a known date.</li>
+    <li>Open a case with a resolved designer and choose <strong>Check for new outfits now</strong>.</li>
+    <li>Confirm the stored archive-search provider is <code>reddit_oauth</code>.</li>
+    <li>Confirm the search status is <code>completed</code>, even if zero exact matches qualify.</li>
+    <li>Run a seven-day proof period and record listing completeness, 401/429 rates, number of queries, candidate yield and editor rejection rate.</li>
+  </ol>
+
+  <h3>10.10 Official references</h3>
+  <ul>
+    <li><a href="https://support.reddithelp.com/hc/en-us/articles/16160319875092-Reddit-Data-API-Wiki">Reddit Data API Wiki</a></li>
+    <li><a href="https://redditinc.com/policies/data-api-terms">Reddit Data API Terms</a></li>
+    <li><a href="https://redditinc.com/policies/developer-terms">Reddit Developer Terms</a></li>
+    <li><a href="https://www.reddit.com/prefs/apps">Reddit application registration</a></li>
+    <li><a href="https://github.com/reddit-archive/reddit/wiki/OAuth2">Reddit OAuth2 technical guide linked by Reddit Help</a></li>
+  </ul>
+  <p class="small">Reddit policies and registration flows can change. Re-check the current official pages before production launch.</p>
+
+  <h2 id="operations" class="page-break">11. Daily operating procedure</h2>
+  <h3>Start the application</h3>
+  <pre>cd C:\Users\shrikha\Desktop\Demo
+docker compose up --build -d
+docker compose ps</pre>
+  <p>Open the dashboard at <a href="http://localhost:3100">http://localhost:3100</a>. API health is <a href="http://localhost:8100/health">http://localhost:8100/health</a> and API documentation is <a href="http://localhost:8100/docs">http://localhost:8100/docs</a>.</p>
+
+  <h3>Editorial checklist</h3>
+  <ol>
+    <li>Review the daily job status and date.</li>
+    <li>Resolve celebrity/designer context gaps before trusting archive search.</li>
+    <li>Check Women, Men and Both classifications.</li>
+    <li>Review same-post images and remove unusable/duplicate panels.</li>
+    <li>For every historical candidate, verify designer, garment, construction details, event and source.</li>
+    <li>Reject “similar but different” outfits; do not lower thresholds merely to fill a collage.</li>
+    <li>Add Grade A/B evidence and complete rights review before approval.</li>
+    <li>Adjust format, layout, crop, filters and watermark.</li>
+    <li>Download and retain the evidence bundle with the editorial record.</li>
+    <li>Publish only through the existing manual WordPress process until draft integration is implemented.</li>
+  </ol>
+
+  <h3>Monitoring and troubleshooting</h3>
+  <pre>docker compose logs --tail 200 api
+docker compose logs --tail 200 web
+docker compose ps</pre>
+  <table>
+    <tr><th>Symptom</th><th>Meaning</th><th>Action</th></tr>
+    <tr><td>OAuth token 401</td><td>Invalid application client ID/secret or wrong app type.</td><td>Re-copy issued application values; never use account password.</td></tr>
+    <tr><td>HTTP 429</td><td>Reddit throttled the request.</td><td>Respect reset/backoff, reduce concurrency, retry later.</td></tr>
+    <tr><td>Designer unresolved</td><td>Title/description parser could not isolate the outfit designer.</td><td>Correct context manually, then research again.</td></tr>
+    <tr><td>No exact match after completed search</td><td>No candidate passed the strict gate.</td><td>Keep source-only collage or inspect reviewable evidence manually.</td></tr>
+    <tr><td>Only one public-source image</td><td>Platform exposed a cover only or blocked metadata.</td><td>Upload credited images manually; do not scrape private content.</td></tr>
+    <tr><td>Collage missing image</td><td>Local media file unavailable or blocked by rights status.</td><td>Review panel catalog, media volume and rights record.</td></tr>
+  </table>
+
+  <h2 id="limitations" class="page-break">12. Known limitations and risks</h2>
+  <ol>
+    <li><strong>External-source reliability:</strong> Reddit and social platforms can change markup, endpoints, policies and rate limits without notice.</li>
+    <li><strong>Credential status:</strong> current health reporting labels OAuth from variable presence, not successful token validation.</li>
+    <li><strong>Error wording:</strong> the UI currently describes every unavailable Reddit search as rate limiting, including 401 authentication failures.</li>
+    <li><strong>Synchronous jobs:</strong> daily automation is serialized inside the API process; there is no durable external queue or per-case worker.</li>
+    <li><strong>Search budget:</strong> anonymous mode searches eight remote cases per run; OAuth mode defaults to 80.</li>
+    <li><strong>Parser limits:</strong> rule-based designer/celebrity extraction can include accessories, styling credits or opinion text.</li>
+    <li><strong>Visual matching:</strong> whole-image histograms and hashes are not garment segmentation or fashion embeddings.</li>
+    <li><strong>Archive coverage:</strong> match recall is naturally low until the archive has repeated designers/outfits across time.</li>
+    <li><strong>Rights:</strong> evidence is not a publishing licence. Editor/legal clearance is mandatory.</li>
+    <li><strong>WordPress:</strong> publishing is disabled and no draft post/media uploader exists.</li>
+    <li><strong>Security perimeter:</strong> direct API GET/media routes require deployment hardening.</li>
+    <li><strong>Database migrations:</strong> tables are created directly; Alembic migrations are not configured.</li>
+    <li><strong>Source control:</strong> the current workspace contains uncommitted implementation changes and should be committed/tagged before handoff.</li>
+  </ol>
+
+  <h2 id="roadmap" class="page-break">13. Production roadmap</h2>
+  <table>
+    <tr><th>Phase</th><th>Goal</th><th>Work</th><th>Exit criteria</th></tr>
+    <tr>
+      <td><strong>0. Baseline</strong><br>Current</td>
+      <td>Freeze the working local demo.</td>
+      <td>Review changes, clean encoding, commit/tag, preserve database/media/output backup, rerun API and web builds.</td>
+      <td>Reproducible build from a clean checkout; tests green; backup restored successfully.</td>
+    </tr>
+    <tr>
+      <td><strong>1. Reddit access</strong></td>
+      <td>Make daily intake and search dependable.</td>
+      <td>Obtain approved OAuth credentials; add a true credential-validation endpoint; map 401, 403, 429 and no-match separately; run a seven-day proof.</td>
+      <td>Every case reaches completed, needs-context, or retry state; no failure is mislabeled as no-match.</td>
+    </tr>
+    <tr>
+      <td><strong>2. Matching quality</strong></td>
+      <td>Increase true-match recall without reintroducing mismatches.</td>
+      <td>Normalize designer entities; remove opinion/styling noise; add person/outfit segmentation and fashion embeddings; compare multiple angles; expose possible matches separately; build a labelled evaluation set.</td>
+      <td>Measured precision/recall targets agreed with editors; exact matches remain high precision; near matches require review.</td>
+    </tr>
+    <tr>
+      <td><strong>3. WordPress drafts</strong></td>
+      <td>Create draft posts, never automatic publication.</td>
+      <td>Use WordPress Application Password; upload media; create idempotent drafts; map category/tag/designer/celebrity metadata; save WordPress draft ID; preview before submission.</td>
+      <td>Approved collage and copy create one reproducible WordPress draft; reruns do not duplicate.</td>
+    </tr>
+    <tr>
+      <td><strong>4. Production platform</strong></td>
+      <td>Move beyond one local computer.</td>
+      <td>Hosted web/API, managed PostgreSQL, object storage, Redis/worker queue, Alembic, Secret Manager, SSO/RBAC, HTTPS, backups, observability and alerting.</td>
+      <td>Security review passed; restore drill complete; jobs survive restarts; service-level monitoring operational.</td>
+    </tr>
+    <tr>
+      <td><strong>5. Editorial rollout</strong></td>
+      <td>Operate safely at daily volume.</td>
+      <td>Rights playbook, source deletion workflow, editorial training, quality dashboard, weekly false-match review and threshold governance.</td>
+      <td>Named owner for every queue; auditable publication decision; documented rollback and incident procedure.</td>
+    </tr>
+  </table>
+
+  <h3>Recommended immediate order</h3>
+  <ol>
+    <li>Decide whether HHC will register/use Reddit OAuth. If not, keep credentials empty and formally adopt manual URL-assisted historical research.</li>
+    <li>Correct the dashboard error wording before further user testing.</li>
+    <li>Freeze and commit the current implementation.</li>
+    <li>Run a labelled 30&ndash;50 case matching evaluation before changing thresholds.</li>
+    <li>Only then implement WordPress draft creation and production hosting.</li>
+  </ol>
+
+  <h2 id="implementation-map" class="page-break">14. Implementation map</h2>
+  <table>
+    <tr><th>Path</th><th>Responsibility</th></tr>
+    <tr><td><code>docker-compose.yml</code></td><td>Local PostgreSQL, API, web, volumes, ports and environment wiring.</td></tr>
+    <tr><td><code>apps/api/app/config.py</code></td><td>Backend settings and safety invariants.</td></tr>
+    <tr><td><code>apps/api/app/main.py</code></td><td>FastAPI lifecycle, scheduler, endpoints, upload/edit actions and API serialization.</td></tr>
+    <tr><td><code>apps/api/app/automation.py</code></td><td>Reddit OAuth/anonymous requests, feed parsing, metadata extraction, eligibility, matching, daily jobs and public-source workflow.</td></tr>
+    <tr><td><code>apps/api/app/collage.py</code></td><td>Canvas geometry, crop/render logic, image adjustments, watermark application and evidence bundles.</td></tr>
+    <tr><td><code>apps/api/app/assets.py</code></td><td>Panel catalogue, normalized source assets and render selection.</td></tr>
+    <tr><td><code>apps/api/app/public_sources.py</code></td><td>Allowed-domain validation, bounded fetch, public metadata extraction and public-image download.</td></tr>
+    <tr><td><code>apps/api/app/designer_search.py</code></td><td>Verified reference catalogue and optional SerpAPI official-domain search.</td></tr>
+    <tr><td><code>apps/api/app/editor_uploads.py</code></td><td>Image and watermark validation/storage.</td></tr>
+    <tr><td><code>apps/api/app/fashion_category.py</code></td><td>Women/Men/Both heuristic classification.</td></tr>
+    <tr><td><code>apps/api/app/models.py</code></td><td>SQLAlchemy data model.</td></tr>
+    <tr><td><code>apps/api/app/schemas.py</code></td><td>Input validation and editor-control limits.</td></tr>
+    <tr><td><code>apps/web/app/page.tsx</code></td><td>HHC login experience.</td></tr>
+    <tr><td><code>apps/web/app/dashboard/page.tsx</code></td><td>Editorial workspaces, research actions, review and collage editor.</td></tr>
+    <tr><td><code>apps/web/app/api/auth/*</code></td><td>Demo/WordPress login, signed session and logout.</td></tr>
+    <tr><td><code>apps/web/app/api/backend/*</code></td><td>Authenticated server-side proxy to the API.</td></tr>
+    <tr><td><code>apps/api/tests/*</code></td><td>Automation, safety, source import, classification, upload and collage tests.</td></tr>
+  </table>
+
+  <h2 id="reference" class="page-break">15. Configuration and API reference</h2>
+  <h3>Important environment variables</h3>
+  <table>
+    <tr><th>Variable</th><th>Purpose</th><th>Current/default behaviour</th></tr>
+    <tr><td><code>REDDIT_SOURCE_MODE</code></td><td>Enables scheduled Reddit workflow.</td><td><code>rss</code> in Compose; OAuth is selected automatically when valid client credentials exist.</td></tr>
+    <tr><td><code>REDDIT_SUBREDDIT</code></td><td>Primary Reddit community.</td><td><code>BollywoodFashion</code>.</td></tr>
+    <tr><td><code>REDDIT_CLIENT_ID</code>/<code>SECRET</code></td><td>Optional OAuth application credentials.</td><td>Both empty for anonymous mode; both required together.</td></tr>
+    <tr><td><code>REDDIT_MATCH_SEARCH_LIMIT</code></td><td>Results examined per remote query.</td><td>100 maximum.</td></tr>
+    <tr><td><code>DAILY_REMOTE_SEARCH_BUDGET</code></td><td>Anonymous searches per daily run.</td><td>8.</td></tr>
+    <tr><td><code>REDDIT_OAUTH_DAILY_SEARCH_BUDGET</code></td><td>OAuth searches per daily run.</td><td>80.</td></tr>
+    <tr><td><code>SERPAPI_KEY</code></td><td>Optional scalable official designer-reference discovery.</td><td>Blank; only built-in verified references available.</td></tr>
+    <tr><td><code>DEMO_LOGIN_ENABLED</code></td><td>Allows local temporary login.</td><td>Compose default true; must be false in production.</td></tr>
+    <tr><td><code>WORDPRESS_SITE_URL</code></td><td>WordPress login-validation target.</td><td>https://www.highheelconfidential.com</td></tr>
+    <tr><td><code>WORDPRESS_PUBLISHER_ENABLED</code></td><td>WordPress publishing feature flag.</td><td>Must remain false in V1.</td></tr>
+    <tr><td><code>AUTO_APPROVE</code></td><td>Would bypass human decisions.</td><td>Must remain false; startup rejects true.</td></tr>
+  </table>
+
+  <h3>Primary API endpoints</h3>
+  <table>
+    <tr><th>Method and path</th><th>Purpose</th></tr>
+    <tr><td><code>GET /health</code></td><td>Basic API, safety-flag and configured-source status.</td></tr>
+    <tr><td><code>GET /api/dashboard</code></td><td>Counts, queues, rights metrics and latest daily job.</td></tr>
+    <tr><td><code>GET /api/cases</code></td><td>Date-sorted case listing.</td></tr>
+    <tr><td><code>GET /api/cases/{id}</code></td><td>Detailed case, candidates, assets, editor state and latest collage.</td></tr>
+    <tr><td><code>POST /api/runs/daily</code></td><td>Run daily Reddit automation now.</td></tr>
+    <tr><td><code>POST /api/intake/source-url</code></td><td>Import an editor-selected public social post.</td></tr>
+    <tr><td><code>POST /api/intake/reddit-url</code></td><td>Create a manual Reddit context-review case.</td></tr>
+    <tr><td><code>POST /api/cases/{id}/research</code></td><td>Run local and available remote outfit research.</td></tr>
+    <tr><td><code>POST /api/candidates/{id}/decision</code></td><td>Save an editor decision and rationale.</td></tr>
+    <tr><td><code>POST /api/cases/{id}/collage/assets</code></td><td>Upload a credited editor image.</td></tr>
+    <tr><td><code>POST /api/cases/{id}/collage/watermark</code></td><td>Upload HHC brand artwork.</td></tr>
+    <tr><td><code>POST /api/cases/{id}/collage/edit</code></td><td>Save and re-render panel, crop, layout, filter and watermark settings.</td></tr>
+    <tr><td><code>GET /api/cases/{id}/bundle</code></td><td>Download the current evidence bundle.</td></tr>
+  </table>
+
+  <h3>Definition of a production-ready result</h3>
+  <ul>
+    <li>Every ingested post receives an explicit terminal or retry state.</li>
+    <li>Authentication, rate limiting and true no-match are never conflated.</li>
+    <li>No historical image is auto-labelled exact without evidence meeting the approved threshold.</li>
+    <li>Every published panel has confirmed identity, source, credit and rights decision.</li>
+    <li>WordPress output is draft-only and idempotent until an editor publishes manually.</li>
+    <li>Secrets are managed outside source control; the API is not publicly exposed.</li>
+    <li>Backups, restore tests, observability and deletion compliance are operational.</li>
+  </ul>
+
+  <p class="footer-note">Prepared from the code and configuration present in the HHC Demo workspace on 5 October 2026. This is an implementation and product document, not legal advice. Platform policies and access terms should be reviewed by the product owner before production use.</p>
+</body>
+</html>

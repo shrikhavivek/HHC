@@ -1,0 +1,110 @@
+/* Royal editorial system. Decorative colour never changes source photographs. */
+:root { --wine:#203c5a; --studio-wine:#203c5a; --ink:#172a3b; --muted:#65707a; --canvas:#f5f3ee; --paper:#fffefa; --line:#dedfdc; --royal:#10283e; --gold:#b99a62; }
+::selection { background:#e4d4b7; color:#10283e; }
+body { color:var(--ink); }
+button,a,input,textarea,select { -webkit-tap-highlight-color:transparent; }
+button:focus-visible,a:focus-visible { outline:3px solid #8c713f; outline-offset:4px; }
+.login-shell.royal-login { grid-template-columns:minmax(0,1.1fr) minmax(400px,.9fr); background:#f7f5f0; min-height:100dvh; }
+.royal-login .login-visual { display:flex; flex-direction:column; padding:48px clamp(36px,5vw,88px); background:radial-gradient(ellipse at 0 100%,#26445866,transparent 65%),#10283e; }
+.royal-login .login-visual::before { background:none; }
+.royal-login .login-visual::after { inset:22px; border:1px solid #b99a6226; border-radius:0; pointer-events:none; }
+.royal-login .login-brand { gap:18px; }
+.royal-login .login-brand > span { width:56px; height:56px; border:1px solid #b99a6280; border-radius:0; background:transparent; color:#d6bd8d; font:400 17px Georgia,serif; }
+.royal-login .login-brand strong { color:#f7f3ea; font:400 27px/1.1 Georgia,serif; letter-spacing:-.03em; }
+.royal-login .login-brand small { color:#aebbc5; font-size:9px; letter-spacing:.19em; margin-top:8px; }
+.royal-login .login-visual-body-refined { display:block; flex:1; align-content:center; padding:88px 0; }
+.royal-login .login-kicker { color:#d6bd8d; font-size:10px; font-weight:500; letter-spacing:.2em; }
+.royal-login .visual-copy h1 { margin:25px 0; color:#fffdf8; font:400 clamp(48px,4.5vw,76px)/1.07 Georgia,serif; letter-spacing:-.045em; }
+.royal-login .visual-copy h1 em { color:#d6bd8d; font-weight:400; }
+.royal-login .visual-copy > p { color:#bec9d0; font-size:14px; line-height:1.9; max-width:385px; }
+.royal-login .atelier-art { display:none; }
+.royal-login .studio-note-tabs { display:flex; flex-wrap:wrap; gap:24px; margin-top:48px; border-top:1px solid #b99a623d; padding-top:20px; }
+.royal-login .studio-note-tabs button { padding:9px 0; min-height:40px; border:0; border-bottom:1px solid transparent; background:transparent; color:#adbbc6; font-size:12px; cursor:pointer; }
+.royal-login .studio-note-tabs button[aria-pressed="true"] { border-bottom-color:#d6bd8d; color:#f5ead4; }
+.royal-login .studio-note-tabs button > span { display:none; }
+.royal-login .studio-note-tabs button:hover { color:#fff; }
+.royal-login .visual-copy .studio-note { font-size:12px; color:#aebbc5; min-height:46px; margin-top:14px; }
+.royal-login .login-visual-footer { color:#aebbc5 !important; font-size:9px; letter-spacing:.14em; }
+.royal-login .login-visual-footer > span { background:#b99a62; box-shadow:none; width:5px; height:5px; }
+.royal-login .login-panel { position:relative; background:#f7f5f0; padding:90px 48px; min-height:100dvh; }
+.royal-access-label { position:absolute; top:48px; right:48px; display:flex; align-items:center; gap:9px; font-size:9px; letter-spacing:.16em; color:#65707a; }
+.royal-access-label > span { width:6px; height:6px; border:1px solid #8c713f; border-radius:50%; }
+.royal-login .login-form { max-width:410px; padding:0; border:0; border-radius:0; background:transparent; box-shadow:none; }
+.royal-login .login-kicker.dark { color:#836b45; font-size:9px; }
+.royal-login .login-form h2 { color:#172a3b; font:400 49px/1.08 Georgia,serif; letter-spacing:-.04em; margin:18px 0; }
+.royal-login .login-form-header p { color:#64707a; font-size:14px; }
+.royal-login .login-fields { margin-top:36px; gap:24px; }
+.royal-login .login-field label { color:#35495a; font-size:11px; font-weight:600; letter-spacing:.04em; text-transform:none; }
+.royal-login .login-input-shell { border:1px solid #cbd0d1; background:#fffefa; border-radius:5px; box-shadow:none; }
+.royal-login .login-input-shell:focus-within { border-color:#355777; box-shadow:0 0 0 3px #35577713; }
+.royal-login .login-input-shell input { min-height:52px; color:#172a3b; font-size:15px; }
+.royal-login .login-input-shell button { color:#35495a; background:transparent; font-size:11px; }
+.royal-login .login-submit { margin-top:28px; min-height:54px; border:1px solid #10283e; border-radius:5px; background:#10283e; color:#fffdf8; box-shadow:none; font-size:11px; letter-spacing:.1em; }
+.royal-login .login-submit:hover:not(:disabled) { background:#203c5a; transform:none; box-shadow:none; }
+.royal-login .login-form-footnote { color:#73808a; letter-spacing:.08em; margin-top:22px; }
+.login-helper { font-size:12px; color:#865829; }
+.studio-shell { background:#f5f3ee; }
+.studio-sidebar { background:#10283e; border-right:1px solid #253d52; }
+.studio-sidebar .brand-mark { background:transparent; border:1px solid #b99a6280; color:#d6bd8d; border-radius:3px; box-shadow:none; }
+.studio-sidebar .brand strong { color:#fffdf8; font-weight:400; }
+.studio-sidebar .brand small { color:#adbac5; }
+.studio-sidebar .nav-item { border-radius:5px; color:#c1cbd3; }
+.studio-sidebar .nav-item.active { background:#ffffff0d; box-shadow:inset 2px 0 #c7ac78; border-radius:4px; color:#fff9ef; }
+.studio-sidebar .nav-item.active b { color:#eedcbb; background:#b99a6226; }
+.studio-sidebar .nav-item:hover { background:#ffffff0d; }
+.studio-sidebar .nav-copy small { color:#a7b7c4; }
+.studio-content .command-bar { background:#fffdf9; border-bottom:1px solid #dedfdc; }
+.studio-content .global-search { background:#f7f6f2; border:1px solid #dedfdc; border-radius:5px; }
+.studio-content .global-search input { font-size:12px; }
+.studio-content .studio-hero { margin-top:16px; padding:0 24px 22px; background:#10283e; border:1px solid #10283e; border-radius:8px; box-shadow:none; }
+.studio-hero .header-rail { color:#bdc8d0; border-bottom-color:#ffffff20; }
+.studio-hero .header-rail i { background:#ffffff20; }
+.studio-hero .hero-row { padding-top:22px; gap:20px; }
+.studio-hero .hero-row h1 { color:#fffdf8; font-size:clamp(34px,3.2vw,48px); line-height:1.08; font-weight:400; letter-spacing:-.025em; }
+.studio-hero .hero-row h1 em { color:#d6bd8d; font-weight:400; }
+.studio-hero .hero-row p { color:#bec9d0; font-size:12px; max-width:650px; }
+.studio-hero .eyebrow { color:#d6bd8d; font-size:9px; }
+.studio-hero .eyebrow > span { background:#b99a62; }
+.studio-hero .hero-seal { width:78px; height:90px; border:1px solid #b99a6270; border-radius:4px; background:transparent; color:#e2c995; transform:none; box-shadow:none; }
+.studio-hero .hero-seal small { color:#bdc8d0; font-size:8px; }
+.studio-content .metrics { gap:12px; }
+.studio-content .metrics article { background:#fffefa; border:1px solid #dedfdc; border-radius:6px; box-shadow:none; }
+.studio-content .metrics article:nth-child(2),.studio-content .metrics article:nth-child(3) { background:#fffefa; }
+.studio-content .metrics .guardrail { background:#edf0ef; color:#203c5a; }
+.studio-content .metrics .guardrail small { color:#5d6d75; }
+.studio-content .studio-workspace { border:1px solid #d7dcdd; border-radius:8px; box-shadow:0 8px 30px #10283e05; }
+.studio-content .queue-panel { background:#f0f2f1; }
+.studio-content .review-panel { background:#fffefa; }
+.studio-content .case-card { border-radius:5px; }
+.studio-content .case-card:hover { background:#fffefa; }
+.studio-content .case-card.current { background:#fffefa; border:1px solid #9eafba; box-shadow:0 3px 12px #10283e06; }
+.studio-content .case-card.current::before { background:#355777; }
+.studio-content .case-thumb { border-radius:4px; }
+.studio-content .filters button { border-radius:4px; min-height:36px; }
+.studio-content .filters button.selected { background:#203c5a; color:#fffefa; border-color:#203c5a; }
+.studio-content .primary,.studio-content .download { background:#203c5a; border:1px solid #203c5a; border-radius:5px; color:#fffefa; box-shadow:none; }
+.studio-content .primary:hover:not(:disabled),.studio-content .download:hover { background:#10283e; }
+.studio-content .edition-command,.studio-content .automatic-draft-card { border-radius:6px; background:#fffefa; border-color:#dedfdc; }
+.studio-content .provider-strip { border-radius:6px; background:#edf0ef; border-color:#d7dcdd; }
+.studio-content .edition-message { background:#eeeae1; border-left-color:#9c8052; color:#4f5d68; }
+.studio-content .page-footer { color:#73808a; }
+#daily-looks { scroll-margin-top:90px; }
+@media (max-width:1080px) { .login-shell.royal-login { grid-template-columns:1fr 1fr; }.royal-login .login-visual { padding:36px; }.royal-login .login-panel { padding:90px 32px; }.royal-login .login-brand strong { font-size:22px; }.royal-login .visual-copy h1 { font-size:48px; } }
+@media (max-width:720px) {
+  .login-shell.royal-login { display:block; }
+  .royal-login .login-visual { min-height:0; padding:30px 26px; }
+  .royal-login .login-visual::after { inset:12px; }
+  .royal-login .login-brand > span { width:42px; height:42px; font-size:13px; }
+  .royal-login .login-brand strong { font-size:22px; }
+  .royal-login .login-visual-body-refined { padding:48px 0 10px; }
+  .royal-login .visual-copy h1 { font-size:44px; }
+  .royal-login .studio-note-tabs { margin-top:26px; gap:20px; }
+  .royal-login .login-visual-footer { display:none !important; }
+  .royal-login .login-panel { min-height:0; padding:74px 26px 42px; }
+  .royal-access-label { top:30px; right:26px; }
+  .royal-login .login-form h2 { font-size:40px; }
+  .studio-content .studio-hero { padding:0 18px 20px; border-radius:6px; }
+  .studio-hero .hero-row h1 { font-size:34px; }
+  .studio-hero .hero-seal { width:60px; height:76px; }
+}
+@media (prefers-reduced-motion:reduce) { .royal-login *, .studio-shell button { transition:none !important; animation:none !important; } }

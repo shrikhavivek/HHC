@@ -1,7 +1,10 @@
 import io
 import json
+from pathlib import Path
 from datetime import datetime, timezone
 from types import SimpleNamespace
+
+import pytest
 
 from app.assets import CURRENT_MATCHER_VERSION, build_panel_catalog, build_render_assets, default_panel_ids, normalize_case_assets
 from app.collage import render_bundle
@@ -150,6 +153,38 @@ def test_complete_reddit_gallery_is_not_truncated():
     assert len(panels) == 13
     assert panels[0]["role"] == "current_primary"
     assert all(item["role"] == "current_angle" for item in panels[1:])
+
+
+@pytest.mark.parametrize("canvas_format,layout_template", [
+    (None, None),
+    ("instagram_portrait", "balanced_grid"),
+    ("instagram_portrait", "hero_focus"),
+    ("instagram_portrait", "editorial_split"),
+    ("instagram_landscape", "balanced_grid"),
+    ("instagram_landscape", "hero_focus"),
+    ("instagram_landscape", "editorial_split"),
+])
+def test_export_has_no_separators_between_any_photos(tmp_path, canvas_format, layout_template):
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    colors = [(180, 30, 50), (30, 140, 110), (40, 90, 180), (180, 130, 40), (130, 50, 160)]
+    for index, color in enumerate(colors, start=1):
+        with Image.new("RGB", (210 + index * 13, 320 + index * 19), color) as photo:
+            photo.save(static_dir / f"look-{index}.png")
+    case = _case([
+        _asset("current_angle", suffix=str(index), image_path=f"/static/look-{index}.png")
+        for index in range(2, 6)
+    ])
+    decision = SimpleNamespace(id="seamless", decision="automation_draft", reason="Edge-to-edge regression")
+    _, manifest_path, _ = render_bundle(
+        str(tmp_path / "output"), str(static_dir), case, [], decision,
+        canvas_format=canvas_format, layout_template=layout_template,
+    )
+    with Image.open(Path(manifest_path).with_name("collage.png")) as collage:
+        pixel_colors = collage.getcolors(maxcolors=len(colors))
+        assert pixel_colors is not None
+        assert {color for _, color in pixel_colors} == set(colors)
+        assert sum(count for count, _ in pixel_colors) == collage.width * collage.height
 
 
 def test_rendered_bundle_contains_today_and_verified_original_panels(tmp_path):

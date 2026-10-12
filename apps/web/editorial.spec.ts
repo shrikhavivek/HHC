@@ -2,15 +2,235 @@ import { test, expect } from "@playwright/test";
 test.use({ viewport: { width: 1440, height: 1000 } });
 const username = process.env.HHC_TEST_USERNAME || "hhc-demo";
 const password = process.env.HHC_TEST_PASSWORD || "HHC-Demo-2026!";
+let sessionCookies: Awaited<ReturnType<import("@playwright/test").BrowserContext["cookies"]>> | undefined;
+
+test("timeless login layout fits desktop and mobile", async ({ page }) => {
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/");
+    await expect(page.getByRole("heading", { name: "Welcome to the studio." })).toBeVisible();
+    await page.evaluate(() => document.fonts.ready);
+    await page.getByRole("button", { name: "Enter the studio" }).scrollIntoViewIfNeeded();
+    const backgroundBounds = await page.locator(".auth-editorial-image").boundingBox();
+    const pageBounds = await page.locator(".auth-shell").boundingBox();
+    expect(backgroundBounds).toEqual(pageBounds);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+    await page.screenshot({ path: `test-results/timeless-login-${width}.png`, fullPage: true, animations: "disabled" });
+  }
+});
+
+for (const width of [1440, 1024, 768, 390, 320]) {
+  test(`pop studio pages fit at ${width}`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/");
+    await expect(page.getByRole("heading", { name: "Welcome to the studio." })).toBeVisible();
+    await expect(page.locator(".auth-editorial-image")).toBeVisible();
+    await page.evaluate(() => document.fonts.ready);
+    await expect.poll(() => page.locator(".auth-editorial-image").evaluate(image => (image as HTMLImageElement).complete && (image as HTMLImageElement).naturalWidth > 0)).toBe(true);
+    await page.getByLabel("Username", { exact: true }).scrollIntoViewIfNeeded();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+    await page.screenshot({ path: `test-results/pop-login-${width}.png`, fullPage: true, animations: "disabled" });
+    await login(page);
+    await expect(page.locator(".studio-hero")).toBeVisible();
+    await expect(page.locator(".studio-hero img")).toHaveCount(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+    await page.screenshot({ path: `test-results/pop-dashboard-${width}.png`, fullPage: true });
+  });
+}
+
+test("flowing login recovers from connection errors with reduced motion", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/");
+  expect(await page.locator(".auth-form").evaluate(element => getComputedStyle(element).animationName)).toBe("none");
+  await page.getByLabel("Username", { exact: true }).fill("sample-editor");
+  await page.getByLabel("Password", { exact: true }).fill("sample-password");
+  await page.getByRole("button", { name: "Show", exact: true }).click();
+  await expect(page.getByLabel("Password", { exact: true })).toHaveAttribute("type", "text");
+  await page.getByRole("button", { name: "Hide", exact: true }).click();
+  await expect(page.getByLabel("Password", { exact: true })).toHaveAttribute("type", "password");
+  await page.route("**/api/auth/login", route => route.abort());
+  await page.getByRole("button", { name: "Enter the studio" }).click();
+  await expect(page.locator(".auth-error")).toContainText("Please try again");
+  await expect(page.locator(".auth-error")).toBeFocused();
+  await expect(page.getByRole("button", { name: "Enter the studio" })).toBeEnabled();
+});
 
 async function login(page: import("@playwright/test").Page) {
+  if (sessionCookies) {
+    await page.context().addCookies(sessionCookies);
+    if ((await page.request.get("/api/auth/session")).ok()) {
+      await page.goto("/dashboard");
+      await expect(page.getByRole("button", { name: "Write story" })).toBeEnabled();
+      return;
+    }
+    await page.context().clearCookies();
+  }
   await page.goto("/");
   await page.getByLabel("Username", { exact: true }).fill(username);
   await page.getByLabel("Password", { exact: true }).fill(password);
   await page.getByRole("button", { name: /^(Sign in|Enter the studio)$/ }).click();
   await expect(page).toHaveURL(/dashboard/);
+  sessionCookies = await page.context().cookies();
   await expect(page.getByRole("button", { name: "Write story" })).toBeEnabled();
 }
+
+test("editorial polish supports mobile navigation and empty search", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await login(page);
+  const navigation = page.getByRole("navigation", { name: "Workspace navigation" });
+  await navigation.getByRole("button", { name: "Women's fashion", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "The womenswear edit." })).toBeVisible();
+  await navigation.getByRole("button", { name: "Today's edit", exact: true }).click();
+  await page.getByRole("textbox", { name: "Search outfits" }).fill("no-matching-outfit-zzzz");
+  await expect(page.getByText("No looks match your search")).toBeVisible();
+  await page.getByRole("button", { name: "Reset view", exact: true }).click();
+  await expect(page.getByRole("textbox", { name: "Search outfits" })).toHaveValue("");
+  await expect(page.locator(".case-card").first()).toBeVisible();
+});
+
+test("editorial polish offers retry when refreshing fails", async ({ page }) => {
+  await login(page);
+  let unavailable = true;
+  await page.route("**/api/backend/dashboard", route => unavailable ? route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "Temporarily unavailable" }) }) : route.continue());
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "Your edit is temporarily unavailable" })).toContainText("We couldn’t refresh your edit");
+  unavailable = false;
+  await page.getByRole("button", { name: "Try again", exact: true }).click();
+  await expect(page.locator(".queue-error")).toHaveCount(0);
+  await expect(page.locator(".case-card").first()).toBeVisible();
+});
+
+test("editorial polish loads its typography and artwork locally", async ({ page }) => {
+  await page.route("https://fonts.googleapis.com/**", route => route.abort());
+  await page.route("https://fonts.gstatic.com/**", route => route.abort());
+  await page.goto("/");
+  await page.evaluate(() => document.fonts.ready);
+  expect(await page.evaluate(() => document.fonts.check('500 16px "Manrope"') && document.fonts.check('500 48px "Cormorant Garamond"'))).toBe(true);
+  expect(await page.locator(".auth-visual h1").evaluate(element => getComputedStyle(element).fontFamily)).toContain("Cormorant Garamond");
+  expect(await page.locator(".auth-manifesto > span").evaluate(element => getComputedStyle(element).fontFamily)).not.toContain("Pinyon Script");
+  expect(await page.locator(".auth-form h2").evaluate(element => getComputedStyle(element).fontFamily)).not.toContain("Pinyon Script");
+  await expect.poll(() => page.locator(".auth-editorial-image").evaluate(image => (image as HTMLImageElement).complete && (image as HTMLImageElement).naturalWidth > 0)).toBe(true);
+  await page.keyboard.press("Tab");
+  await expect(page.getByRole("link", { name: "Skip to content" })).toBeFocused();
+  expect((await page.request.get("/icon.svg")).status()).toBe(200);
+});
+test("editorial polish login preserves input and presents rate-limit feedback", async ({ page }) => {
+  await page.goto("/");
+  await page.getByLabel("Username", { exact: true }).fill("sample-editor");
+  await page.getByLabel("Password", { exact: true }).fill("sample-password");
+  await page.route("**/api/auth/login", route => route.fulfill({ status: 429, contentType: "application/json", body: JSON.stringify({ detail: "Too many attempts. Try again in 15 minutes." }) }));
+  await page.getByRole("button", { name: "Enter the studio" }).click();
+  await expect(page.locator(".auth-error")).toHaveText("Too many attempts. Try again in 15 minutes.");
+  await expect(page.locator(".auth-error")).toBeFocused();
+  await expect(page.getByLabel("Username", { exact: true })).toHaveValue("sample-editor");
+  await expect(page.getByLabel("Password", { exact: true })).toHaveValue("sample-password");
+  await expect(page.getByRole("button", { name: "Enter the studio" })).toBeEnabled();
+});
+
+test("editorial polish keeps a uniform canvas without header photos", async ({ page }) => {
+  await login(page);
+  const backgrounds = await page.locator(".studio-shell, .studio-sidebar, .command-bar, .queue-panel, .review-panel, .metrics article").evaluateAll(elements => elements.map(element => getComputedStyle(element).backgroundColor));
+  expect(new Set(backgrounds).size).toBe(1);
+  await expect(page.locator(".studio-hero img")).toHaveCount(0);
+  await expect(page.getByText("IN THIS EDITION", { exact: true })).toHaveCount(0);
+  const look = page.locator(".case-card").nth(1);
+  const person = await look.locator(".case-copy > strong").innerText();
+  await look.click();
+  await expect(page.locator(".review-heading h2")).toHaveText(person);
+  await expect(look).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".look-facts")).toContainText("Discovery signal");
+  await expect(page.locator(".look-facts")).toContainText("Not editorial verification");
+});
+
+test("editorial polish stays dark even with a previously saved light preference", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("hhc-studio-theme", "light"));
+  await page.goto("/");
+  const loginBackground = await page.locator(".auth-form").evaluate(element => getComputedStyle(element).backgroundColor);
+  await login(page);
+  await expect(page.locator(".studio-shell")).toHaveAttribute("data-theme", "dark");
+  await expect(page.getByRole("group", { name: "Color theme" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Light", exact: true })).toHaveCount(0);
+  await page.reload();
+  await expect(page.locator(".studio-shell")).toHaveAttribute("data-theme", "dark");
+  await expect(page.getByRole("button", { name: "Write story" })).toBeEnabled();
+  await page.screenshot({ path: "test-results/theme-dark-desktop.png", fullPage: true });
+  await page.getByRole("button", { name: "Write story" }).click();
+  expect(await page.getByRole("dialog").evaluate(element => getComputedStyle(element).backgroundColor)).toBe("rgb(33, 30, 34)");
+  await page.screenshot({ path: "test-results/theme-dark-dialog.png" });
+  await page.getByRole("button", { name: "Close editorial workspace" }).click();
+  await page.getByRole("button", { name: "Edit collage & sources", exact: true }).click();
+  await expect(page.locator(".collage-editor-modal")).toBeVisible();
+  expect(await page.locator(".collage-editor-modal").evaluate(element => getComputedStyle(element).backgroundColor)).toBe("rgb(33, 30, 34)");
+  await page.screenshot({ path: "test-results/theme-dark-collage.png" });
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".collage-editor-modal")).toHaveCount(0);
+  await page.setViewportSize({ width: 320, height: 844 });
+  await expect(page.locator(".studio-shell")).toHaveAttribute("data-theme", "dark");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+  await page.screenshot({ path: "test-results/theme-dark-mobile.png", fullPage: true });
+  await page.context().clearCookies();
+  await page.goto("/");
+  await expect(page.locator(".auth-shell")).toBeVisible();
+  await expect(page.getByRole("group", { name: "Color theme" })).toHaveCount(0);
+  expect(await page.locator(".auth-form").evaluate(element => getComputedStyle(element).backgroundColor)).toBe(loginBackground);
+});
+
+test("editorial polish theme remains usable when storage is blocked", async ({ page }) => {
+  await page.addInitScript(() => {
+    Storage.prototype.getItem = () => { throw new Error("Storage blocked"); };
+    Storage.prototype.setItem = () => { throw new Error("Storage blocked"); };
+  });
+  await login(page);
+  await expect(page.locator(".studio-shell")).toHaveAttribute("data-theme", "dark");
+  await expect(page.getByRole("group", { name: "Color theme" })).toHaveCount(0);
+});
+
+test("editorial polish keeps every collage editing panel dark and readable", async ({ page }) => {
+  await login(page);
+  await page.getByRole("button", { name: "Edit collage & sources", exact: true }).click();
+  const editor = page.locator(".collage-editor-modal");
+  await editor.getByRole("button", { name: /^Resize or crop/ }).first().click();
+  for (const selector of [".watermark-editor-panel", ".editor-upload-panel"]) {
+    if (await editor.locator(selector).getAttribute("open") === null) await editor.locator(`${selector} > summary`).click();
+  }
+  const surfaces = editor.locator(".collage-context-panel, .collage-filter-panel, .watermark-editor-panel, .editor-upload-panel, .collage-context-content > section, .panel-tuning, details > summary, :scope > footer");
+  const backgrounds = await surfaces.evaluateAll(elements => elements.map(element => ({ selector: element.className || element.tagName, color: getComputedStyle(element).backgroundColor })));
+  expect(backgrounds.length).toBeGreaterThan(8);
+  for (const surface of backgrounds) expect(["rgb(33, 30, 34)", "rgb(45, 40, 47)"]).toContain(surface.color);
+  const contrasts = await editor.locator(".collage-context-content strong, details > summary b, details > summary small, .collage-rights-notice, .panel-tuning label > span, .filter-presets button, .watermark-note, .editor-upload-panel label, .all-panels-used > span, :scope > footer > div:first-child").evaluateAll(elements => {
+    const luminance = (color: string) => {
+      const channels = (color.match(/[\d.]+/g) || []).slice(0, 3).map(value => {
+        const channel = Number(value) / 255;
+        return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+      });
+      return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+    };
+    return elements.map(element => {
+      let ancestor: Element | null = element;
+      let background = "rgba(0, 0, 0, 0)";
+      while (ancestor && background === "rgba(0, 0, 0, 0)") {
+        background = getComputedStyle(ancestor).backgroundColor;
+        ancestor = ancestor.parentElement;
+      }
+      const foregroundLight = luminance(getComputedStyle(element).color);
+      const backgroundLight = luminance(background);
+      return { text: element.textContent?.trim().slice(0, 70), ratio: (Math.max(foregroundLight, backgroundLight) + 0.05) / (Math.min(foregroundLight, backgroundLight) + 0.05) };
+    });
+  });
+  for (const contrast of contrasts) expect(contrast.ratio, contrast.text).toBeGreaterThanOrEqual(4.5);
+  for (const preview of await editor.locator(".layout-template-preview").all()) {
+    expect(await preview.evaluate(element => ({ gap: getComputedStyle(element).gap, border: getComputedStyle(element).borderWidth }))).toEqual({ gap: "0px", border: "0px" });
+  }
+  await editor.locator(".collage-context-panel").scrollIntoViewIfNeeded();
+  await page.screenshot({ path: "test-results/dark-editor-rights.png" });
+  await editor.locator(".editor-upload-panel").scrollIntoViewIfNeeded();
+  await page.screenshot({ path: "test-results/dark-editor-tools.png" });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await editor.locator(".editor-upload-panel").scrollIntoViewIfNeeded();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: "test-results/dark-editor-mobile.png" });
+});
+
 test("private images and API reads require a session", async ({ request }) => {
   expect((await request.get("/media/static/look-1.png")).status()).toBe(401);
   expect((await request.get("/api/backend/cases")).status()).toBe(401);
