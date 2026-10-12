@@ -987,7 +987,7 @@ def parse_outfit(title: str, description: str) -> dict[str, str]:
             event = _clean_field(campaign.group(2), 240)
 
     match = re.match(r"^(.+?)\s+(?:in|wearing)\s+(.+?)(?:\s+(?:for|at|during)\s+(.+))?$", clean, re.I)
-    if match and not social_person:
+    if match and not social_person and not re.search(r"\s+(?:for|at|during)\s+", match.group(1), re.I):
         person = _clean_field(match.group(1))
         proposed_designer = _clean_field(match.group(2))
         if not re.match(r"^(?:a|an|the)\s+", proposed_designer, re.I):
@@ -995,7 +995,7 @@ def parse_outfit(title: str, description: str) -> dict[str, str]:
         if match.group(3):
             event = _clean_field(match.group(3), 240)
     elif person == "Unresolved":
-        boundary = re.split(r"\s+(?:for|at)\s+", clean, maxsplit=1, flags=re.I)
+        boundary = re.split(r"\s+(?:for|at|during)\s+", clean, maxsplit=1, flags=re.I)
         person = _clean_field(boundary[0])
         if len(boundary) > 1:
             event = _clean_field(boundary[1], 240)
@@ -1016,8 +1016,10 @@ def _refresh_case_metadata(case: Case) -> dict[str, dict[str, str]]:
     """Repair unresolved metadata as parsing improves without overwriting edits."""
     parsed = parse_outfit(case.source_title, case.source_body)
     changes: dict[str, dict[str, str]] = {}
+    event_in_person = bool(re.search(r"\s+(?:for|at|during)\s+", case.celebrity, re.I)) and _canonical(case.celebrity).startswith(f"{_canonical(parsed['celebrity'])} ")
     malformed_person = (
-        case.celebrity.casefold().startswith("how does ")
+        event_in_person
+        or case.celebrity.casefold().startswith("how does ")
         or "latest campaign" in case.celebrity.casefold()
         or " on instagram" in case.celebrity.casefold()
         or " on tiktok" in case.celebrity.casefold()
@@ -1028,7 +1030,8 @@ def _refresh_case_metadata(case: Case) -> dict[str, dict[str, str]]:
         changes["celebrity"] = {"from": case.celebrity, "to": parsed["celebrity"]}
         case.celebrity = parsed["celebrity"]
     malformed_designer = (
-        case.designer.casefold() in UNKNOWN_VALUES
+        event_in_person
+        or case.designer.casefold() in UNKNOWN_VALUES
         or any(handle in case.designer.casefold().replace("@", "") for handle in KNOWN_CELEBRITY_HANDLES)
     )
     if malformed_designer and parsed["designer"].casefold() not in UNKNOWN_VALUES:
@@ -1041,8 +1044,17 @@ def _refresh_case_metadata(case: Case) -> dict[str, dict[str, str]]:
 
     if changes:
         extraction = case.extraction if isinstance(case.extraction, dict) else {}
+        assets = []
+        for asset in extraction.get("collage_assets", []):
+            if isinstance(asset, dict) and asset.get("role") in {"current_primary", "current_angle"}:
+                asset = dict(asset)
+                for field, asset_field in (("celebrity", "person"), ("designer", "designer")):
+                    if field in changes and asset.get(asset_field) == changes[field]["from"]:
+                        asset[asset_field] = changes[field]["to"]
+            assets.append(asset)
         case.extraction = {
             **extraction,
+            "collage_assets": assets,
             "metadata_refresh": {
                 "checked_at": datetime.now(timezone.utc).isoformat(),
                 "changes": changes,

@@ -231,6 +231,34 @@ test("editorial polish keeps every collage editing panel dark and readable", asy
   await page.screenshot({ path: "test-results/dark-editor-mobile.png" });
 });
 
+test("editorial polish shows the full collage while adjusting filters", async ({ page }) => {
+  await login(page);
+  await page.getByRole("button", { name: "Edit collage & sources", exact: true }).click();
+  const panel = page.locator(".collage-filter-panel");
+  const preview = panel.getByRole("img", { name: "Filtered collage preview" });
+  await expect.poll(() => preview.evaluate(element => (element as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await preview.scrollIntoViewIfNeeded();
+    const dimensions = await preview.evaluate(element => {
+      const photo = element as HTMLImageElement;
+      const style = getComputedStyle(photo);
+      return { fit: style.objectFit, height: photo.clientHeight, frameHeight: photo.parentElement!.clientHeight, width: photo.clientWidth, frameWidth: photo.parentElement!.clientWidth };
+    });
+    expect(dimensions.fit).toBe("contain");
+    expect(dimensions.height).toBeGreaterThan(96);
+    expect(dimensions.frameHeight).toBeGreaterThanOrEqual(dimensions.height);
+    expect(dimensions.frameWidth).toBeGreaterThanOrEqual(dimensions.width);
+    await panel.getByRole("button", { name: "Mono", exact: true }).click();
+    await expect(preview).toHaveCSS("filter", /grayscale\(1\)/);
+    await preview.scrollIntoViewIfNeeded();
+    await expect(preview).toBeInViewport({ ratio: 1 });
+    await page.screenshot({ path: `test-results/full-collage-filter-${width}.png` });
+    await panel.getByRole("button", { name: "Original", exact: true }).click();
+    await expect(preview).toHaveCSS("filter", /grayscale\(0\)/);
+  }
+});
+
 test("private images and API reads require a session", async ({ request }) => {
   expect((await request.get("/media/static/look-1.png")).status()).toBe(401);
   expect((await request.get("/api/backend/cases")).status()).toBe(401);

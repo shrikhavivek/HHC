@@ -48,6 +48,30 @@ def test_private_reads_and_media_require_authentication(studio):
     for path in ("/api/cases", "/api/dashboard", "/outputs/anything.webp", "/media-files/a.jpg", "/static/look-1.png", "/docs", "/api/operations"):
         assert client.get(path).status_code == 401
 
+
+def test_reposts_are_grouped_consistently_without_deleting_sources(studio, monkeypatch):
+    client, headers, factory = studio
+    monkeypatch.setattr(main, "in_current_edition", lambda *args: True)
+    with factory() as db:
+        original = db.get(Case, "editorial-case")
+        original.extraction = {"collage_edit": {"revision": 1}}
+        for identifier, person in [("repost", original.celebrity), ("another-person", "Alia Bhatt")]:
+            db.add(Case(
+                id=identifier, permalink=f"https://example.com/{identifier}", source_title=f"{person} in Sabyasachi",
+                celebrity=person, designer=original.designer, event_name=original.event_name,
+                base_image=original.base_image, status="review_ready", demo_data=False,
+            ))
+        db.commit()
+    cases = client.get("/api/cases", headers=headers).json()
+    assert {row["id"] for row in cases} == {"editorial-case", "another-person"}
+    assert next(row for row in cases if row["id"] == "editorial-case")["source_post_count"] == 2
+    assert client.get("/api/dashboard", headers=headers).json()["total"] == 2
+    filtered = client.get("/api/cases?status=review_ready", headers=headers).json()
+    assert [row["id"] for row in filtered] == ["another-person"]
+    assert client.get("/api/cases/repost", headers=headers).status_code == 200
+    with factory() as db:
+        assert len(db.scalars(select(Case)).all()) == 3
+
 def test_sessions_expire_and_can_be_revoked(studio):
     client, headers, _ = studio
     session_id = "a" * 64

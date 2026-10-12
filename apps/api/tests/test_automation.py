@@ -30,6 +30,27 @@ def test_title_and_description_drive_outfit_extraction():
     }
 
 
+def test_event_location_is_not_parsed_as_a_designer():
+    title = "Kangana Ranaut for the inauguration of PNG Jewellers and a visit to the Shri Ram Janmabhoomi Mandir in Ayodhya."
+    parsed = parse_outfit(title, "Designer: Gaurang Shah")
+    assert parsed["celebrity"] == "Kangana Ranaut"
+    assert parsed["designer"] == "Gaurang Shah"
+    assert parsed["event"].endswith("in Ayodhya.")
+    case = SimpleNamespace(
+        source_title=title, source_body="Designer: Gaurang Shah", celebrity=title.rsplit(" in ", 1)[0],
+        designer="Ayodhya.", event_name="Unresolved", status="review_ready", extraction={},
+    )
+    assert set(_refresh_case_metadata(case)) == {"celebrity", "designer", "event"}
+    assert case.celebrity == "Kangana Ranaut"
+    assert case.designer == "Gaurang Shah"
+    assert _refresh_case_metadata(case) == {}
+
+
+def test_verified_context_is_not_replaced_by_the_parser():
+    case = SimpleNamespace(extraction={"context_verified": True})
+    assert _refresh_case_metadata(case) == {}
+
+
 def test_multi_brand_and_handle_descriptions_are_extracted():
     campaign = parse_outfit(
         "Arjun Kapoor’s latest campaign for Heineken India",

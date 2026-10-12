@@ -34,6 +34,7 @@ from .database import Base, SessionLocal, engine, get_db
 from .editor_uploads import MAX_UPLOAD_BYTES, MAX_WATERMARK_UPLOAD_BYTES, UploadValidationError, store_editor_image, store_watermark_image
 from .fashion_category import case_fashion_category
 from .edition_window import in_current_edition
+from .outfit_posts import group_outfit_posts
 from .models import AuditEvent, Candidate, Case, Collage, Decision, JobRun
 from .public_sources import DuplicatePublicSourceError, PublicSourceError
 from .schemas import CollageEditInput, CollageInput, DecisionInput, FashionCategoryInput, ManualIntake, SourceUrlIntake
@@ -228,6 +229,7 @@ def dashboard(db: Session = Depends(get_db)):
     eligible_cases = [case for case in db.scalars(select(Case)).all() if case_content_eligible(case) and in_current_edition(case, settings.reddit_daily_timezone)]
     has_live = any(not case.demo_data and case.source_type == "reddit_rss" for case in eligible_cases)
     visible_cases = [case for case in eligible_cases if not case.demo_data] if has_live else eligible_cases
+    visible_cases = [group[0] for group in group_outfit_posts(visible_cases, settings.media_dir)]
     counts: dict[str, int] = {}
     for case in visible_cases:
         counts[case.status] = counts.get(case.status, 0) + 1
@@ -281,9 +283,13 @@ def list_cases(status_filter: str | None = Query(default=None, alias="status"), 
     has_live = any(case_content_eligible(case) for case in live_cases)
     if has_live:
         stmt = stmt.where(Case.demo_data.is_(False))
-    if status_filter and status_filter != "all":
-        stmt = stmt.where(Case.status == status_filter)
-    return [case_json(row) for row in db.scalars(stmt).all() if case_content_eligible(row) and in_current_edition(row, settings.reddit_daily_timezone)]
+    cases = [row for row in db.scalars(stmt).all() if case_content_eligible(row) and in_current_edition(row, settings.reddit_daily_timezone)]
+    groups = group_outfit_posts(cases, settings.media_dir)
+    return [
+        {**case_json(group[0]), "source_post_count": len(group)}
+        for group in groups
+        if not status_filter or status_filter == "all" or group[0].status == status_filter
+    ]
 
 
 @app.get("/api/cases/{case_id}")

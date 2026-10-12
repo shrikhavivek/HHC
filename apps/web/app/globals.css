@@ -1055,8 +1055,8 @@ button:disabled { opacity: .52; cursor: not-allowed !important; transform: none 
 .collage-filter-panel[open] summary { border-bottom: 1px solid rgba(35,24,27,.09); background: #eaf1f2; }
 .collage-filter-content { padding: 11px; }
 .collage-filter-content > p { margin: 8px 0 0; color: #7d8a8e; font-size: 5px; line-height: 1.45; }
-.collage-filter-preview { height: 96px; margin-bottom: 10px; overflow: hidden; border: 1px solid rgba(35,24,27,.1); background: #20191b; }
-.collage-filter-preview img { width: 100%; height: 100%; display: block; object-fit: cover; }
+.collage-filter-preview { margin-bottom: 16px; overflow: hidden; border: 1px solid rgba(35,24,27,.1); background: #20191b; }
+.collage-filter-preview img { width: 100%; height: auto; max-height: min(48dvh, 520px); display: block; object-fit: contain; }
 .image-adjustment-controls { display: grid; gap: 9px; }
 .filter-presets { display: grid; grid-template-columns: repeat(5,minmax(0,1fr)); gap: 3px; }
 .filter-presets button { min-width: 0; min-height: 27px; padding: 4px 2px; overflow: hidden; color: #776a68; border: 1px solid rgba(35,24,27,.11); background: #fff; cursor: pointer; font-size: 5px; font-weight: 750; letter-spacing: .035em; text-overflow: ellipsis; text-transform: uppercase; }
