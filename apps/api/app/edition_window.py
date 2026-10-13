@@ -1,6 +1,7 @@
 """Daily desk visibility; historical cases remain available for outfit research."""
 from datetime import datetime, timedelta, timezone, date
 from zoneinfo import ZoneInfo
+from .publication_dates import is_current_week, is_recent_post
 
 
 def in_current_edition(case, timezone_name="Asia/Kolkata", now=None):
@@ -8,6 +9,10 @@ def in_current_edition(case, timezone_name="Asia/Kolkata", now=None):
     today = (now or datetime.now(timezone.utc)).astimezone(zone).date()
     extraction = case.extraction or {}
     published = extraction.get("published_at")
+    if extraction.get("source_platform") == "Instagram" or extraction.get("provider") == "instagram_browser":
+        return is_recent_post(published, timezone_name, now)
+    if extraction.get("web_discovered"):
+        return is_current_week(published, timezone_name, now)
     try:
         if published:
             stamp = datetime.fromisoformat(published.replace("Z", "+00:00"))

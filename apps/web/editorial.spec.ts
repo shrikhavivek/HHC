@@ -55,12 +55,13 @@ test("flowing login recovers from connection errors with reduced motion", async 
   await expect(page.getByRole("button", { name: "Enter the studio" })).toBeEnabled();
 });
 
-async function login(page: import("@playwright/test").Page) {
+async function login(page: import("@playwright/test").Page, workspace: "editor" | "instagram" = "editor") {
+  const ready = () => workspace === "instagram" ? expect(page.getByRole("region", { name: "Instagram discovery", exact: true })).toBeVisible() : expect(page.getByRole("button", { name: "Write story" })).toBeEnabled();
   if (sessionCookies) {
     await page.context().addCookies(sessionCookies);
     if ((await page.request.get("/api/auth/session")).ok()) {
       await page.goto("/dashboard");
-      await expect(page.getByRole("button", { name: "Write story" })).toBeEnabled();
+      await ready();
       return;
     }
     await page.context().clearCookies();
@@ -152,7 +153,7 @@ test("editorial polish stays dark even with a previously saved light preference"
   await expect(page.getByRole("button", { name: "Light", exact: true })).toHaveCount(0);
   await page.reload();
   await expect(page.locator(".studio-shell")).toHaveAttribute("data-theme", "dark");
-  await expect(page.getByRole("button", { name: "Write story" })).toBeEnabled();
+  await ready();
   await page.screenshot({ path: "test-results/theme-dark-desktop.png", fullPage: true });
   await page.getByRole("button", { name: "Write story" }).click();
   expect(await page.getByRole("dialog").evaluate(element => getComputedStyle(element).backgroundColor)).toBe("rgb(33, 30, 34)");
@@ -345,6 +346,88 @@ test("editorial polish uses readable text throughout the studio", async ({ page 
   await page.getByRole("button", { name: "Maximize collage editor", exact: true }).click();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: "test-results/readable-editor-large-text.png" });
+});
+
+test("instagram discovery unifies scanning and dated photo drafts", async ({ page }) => {
+  let requested = 0;
+  let complete = false;
+  await page.route("**/api/backend/instagram-browser/status", route => route.fulfill({ json: { status: complete ? "completed" : requested ? "running" : "not_run", heartbeat: Date.now() / 1000, runner_online: true, accounts_total: 16, accounts_checked: complete ? 16 : 0, current_account: "Kriti Sanon", imported: complete ? 1 : 0 } }));
+  await page.route("**/api/backend/instagram-browser/scan", route => {
+    expect(route.request().method()).toBe("POST");
+    expect(route.request().postDataJSON()).toEqual({});
+    requested += 1;
+    return route.fulfill({ status: 202, json: { status: "queued", heartbeat: Date.now() / 1000 } });
+  });
+  await page.route("**/api/backend/instagram-browser/posts", route => route.fulfill({ json: { results: [] } }));
+  await login(page, "instagram");
+  const panel = page.getByRole("region", { name: "Instagram discovery", exact: true });
+  await expect(page.getByRole("heading", { name: "Discover Instagram posts", exact: true })).toHaveCount(1);
+  await expect(page.getByText("Instagram fashion watch", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Find Instagram posts", exact: true })).toHaveCount(0);
+  await expect(panel.getByLabel("Celebrity watchlist", { exact: true })).not.toBeVisible();
+  await panel.getByRole("button", { name: "Scan now", exact: true }).click();
+  await expect(panel.getByRole("status")).toContainText("Scan queued");
+  await expect(panel.getByRole("button", { name: "Scan in progress…", exact: true })).toBeDisabled();
+  expect(requested).toBe(1);
+  const cases = await (await page.request.get("/api/backend/cases")).json();
+  await page.route("**/api/backend/instagram-browser/posts", route => route.fulfill({ json: { results: [{ id: cases[0].id, celebrity: "Kriti Sanon", base_image: cases[0].base_image, collage_image: cases[0].base_image, photo_count: 3, carousel_complete: true, permalink: "https://www.instagram.com/p/fixture/", published_at: "2026-10-13T09:00:00+05:30", brands: ["Gucci"] }] } }));
+  complete = true;
+  await expect(panel.getByRole("heading", { name: "Kriti Sanon", exact: true })).toBeVisible({ timeout: 12000 });
+  await expect(panel.getByText(/Published 13 Oct/)).toBeVisible();
+  await expect(panel.getByText("Mentioned or tagged: Gucci", { exact: true })).toBeVisible();
+  await expect(panel.getByRole("status")).toContainText("Scan complete");
+  await expect(panel.getByText("3 photos collected · Carousel checked", { exact: true })).toBeVisible();
+  await panel.getByLabel("Filter collected photos").fill("Dior");
+  await expect(panel.getByText("No collected photos match that celebrity or brand.")).toBeVisible();
+  await panel.getByLabel("Filter collected photos").fill("Kriti");
+  for (const width of [1440, 390, 320]) {
+    await page.setViewportSize({ width, height: 1000 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await panel.screenshot({ path: `test-results/instagram-discovery-${width}.png` });
+  }
+  await panel.getByRole("button", { name: "Open editable draft", exact: true }).click();
+  await expect(page.locator(".review-identity h2")).toHaveText(cases[0].celebrity);
+});
+
+test("instagram discovery reports offline collector without pretending to scan", async ({ page }) => {
+  await page.route("**/api/backend/instagram-browser/status", route => route.fulfill({ json: { status: "not_run", runner_online: false } }));
+  await page.route("**/api/backend/instagram-browser/posts", route => route.fulfill({ json: { results: [] } }));
+  await page.route("**/api/backend/instagram-browser/scan", route => route.fulfill({ status: 503, json: { detail: "The local Instagram collector is offline. Start HHC Instagram Requests." } }));
+  await login(page, "instagram");
+  const panel = page.getByRole("region", { name: "Instagram discovery", exact: true });
+  await panel.getByRole("button", { name: "Scan now", exact: true }).click();
+  await expect(panel.getByRole("alert")).toContainText("collector is offline");
+  await expect(panel.getByRole("button", { name: "Scan now", exact: true })).toBeEnabled();
+  await expect(panel.getByRole("status")).not.toContainText("Scan complete");
+});
+
+test("instagram watchlist reports blocked scans and saves editable coverage", async ({ page }) => {
+  const config = { enabled: true, celebrities: [{ name: "Kriti Sanon", handle: "kritisanon", enabled: true }], brands: [{ name: "Gucci", handles: ["gucci"], aliases: [] }] };
+  await page.route("**/api/backend/instagram-browser/config", route => {
+    if (route.request().method() === "POST") {
+      const saved = route.request().postDataJSON();
+      expect(saved.celebrities).toHaveLength(2);
+      expect(saved.celebrities[1]).toEqual({ name: "Alia Bhatt", handle: "aliaabhatt", enabled: false });
+      expect(saved.brands[0].name).toBe("Gucci");
+      return route.fulfill({ json: saved });
+    }
+    return route.fulfill({ json: config });
+  });
+  await page.route("**/api/backend/instagram-browser/status", route => route.fulfill({ json: { status: "blocked", accounts_checked: 1, posts_checked: 3, imported: 0, detail: "Instagram requires verification. No bypass attempted.", exclusions: { outside_today_yesterday: 3 } } }));
+  await page.route("**/api/backend/instagram-browser/posts", route => route.fulfill({ json: { results: [] } }));
+  await login(page, "instagram");
+  const watchlist = page.locator(".instagram-watchlist");
+  await expect(watchlist.getByText("Instagram needs your attention", { exact: true })).toBeVisible();
+  await expect(watchlist.getByText("Today & yesterday", { exact: true })).toBeVisible();
+  await watchlist.getByText("Watchlist settings", { exact: true }).click();
+  await watchlist.getByLabel("Celebrity watchlist", { exact: true }).fill("Kriti Sanon | kritisanon\nAlia Bhatt | aliaabhatt | off");
+  await watchlist.getByRole("button", { name: "Save watchlist", exact: true }).click();
+  await expect(watchlist.getByText(/Watchlist saved/)).toBeVisible();
+  for (const width of [1440, 390, 320]) {
+    await page.setViewportSize({ width, height: 1000 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await watchlist.screenshot({ path: `test-results/instagram-watchlist-${width}.png` });
+  }
 });
 
 test("private images and API reads require a session", async ({ request }) => {

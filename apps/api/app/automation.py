@@ -26,6 +26,7 @@ from .collage import render_bundle
 from .designer_search import find_official_designer_reference
 from .models import AuditEvent, Candidate, Case, Collage, Decision, JobRun
 from .public_sources import DuplicatePublicSourceError, PublicSourceError, download_public_images, inspect_public_post, normalized_published_date
+from .publication_dates import is_current_week
 
 
 BLOCKED_TITLE_PREFIXES = ("[request]", "id this", "who is", "weekly thread")
@@ -2033,11 +2034,11 @@ def research_case_automation(db: Session, case: Case, settings, static_dir: str)
 
 
 @_serialized
-def import_public_post_automation(db: Session, payload: dict, settings, static_dir: str) -> dict:
+def import_public_post_automation(db: Session, payload: dict, settings, static_dir: str, *, verified_source: dict | None = None) -> dict:
     """Create and research one editor-supplied public social post."""
     created_files: list[Path] = []
     try:
-        source = inspect_public_post(
+        source = verified_source or inspect_public_post(
             str(payload["source_url"]),
             user_agent=settings.source_import_user_agent,
             allowed_domains=settings.public_import_allowed_domains,
@@ -2101,6 +2102,9 @@ def import_public_post_automation(db: Session, payload: dict, settings, static_d
             "source_platform": source["platform"],
             "source_publisher": source["publisher"],
             "source_author": source.get("author") or "",
+            "published_at": source.get("published") or None,
+            "web_discovered": bool(source.get("web_discovered")),
+            "publication": {key: source[key] for key in ("published_date", "date_precision", "date_evidence") if key in source},
             "retrieved_at": retrieved_at,
             "search_basis": {"title": title, "description": description},
             "source_image_urls": valid_urls,
@@ -2114,6 +2118,11 @@ def import_public_post_automation(db: Session, payload: dict, settings, static_d
                 "rights_review_required": True,
             },
         }
+        if source.get("web_discovered"):
+            from .publication_dates import is_recent_post
+            within_window = is_recent_post if source.get("platform") == "Instagram" else is_current_week
+            if not within_window(source.get("published_at"), settings.reddit_daily_timezone):
+                raise PublicSourceError("The source is no longer in the eligible publication window. Discover again.")
         case = Case(
             source_type="public_post_url",
             external_id=source["post_id"],
@@ -2123,7 +2132,7 @@ def import_public_post_automation(db: Session, payload: dict, settings, static_d
             celebrity=outfit["celebrity"],
             designer=outfit["designer"],
             event_name=outfit["event"],
-            event_date=normalized_published_date(source.get("published")),
+            event_date=source.get("published_date") or normalized_published_date(source.get("published")),
             status="review_ready" if known_designer else "context_review",
             match_type="source_only",
             confidence=0.8 if known_designer else 0.5,

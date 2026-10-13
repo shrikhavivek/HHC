@@ -5,6 +5,7 @@ import "./studio-design.css";
 import "./collage-usability.css";
 import "./studio-theme.css";
 import "./studio-readability.css";
+import "./web-discovery.css";
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {

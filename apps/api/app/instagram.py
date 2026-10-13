@@ -8,6 +8,7 @@ from .automation import _add_matches, _collage_assets, editorial_subject_eligibi
 from .models import AuditEvent, Case
 from .providers import before_request, observe_response, ProviderDeferred
 from .public_sources import download_public_images
+from .publication_dates import is_recent_post
 
 class InstagramError(RuntimeError):
     pass
@@ -71,14 +72,21 @@ def instagram_posts(settings, target_date):
             seen.add(cursor)
 
 def run_instagram(db, settings, static_dir, target_date):
+    from .instagram_browser import brand_mentions, config_for
     if not settings.instagram_access_token or not settings.instagram_account_id:
         return {"status": "not_configured", "created": 0}
     summary = {"status": "completed", "created": 0, "skipped": 0, "failed": 0, "case_ids": []}
     for post in instagram_posts(settings, target_date):
+        if not is_recent_post(post["published"].isoformat(), settings.reddit_daily_timezone):
+            summary["skipped"] += 1
+            continue
         if db.scalar(select(Case.id).where(Case.permalink == post["permalink"])):
             summary["skipped"] += 1
             continue
         caption = post.get("caption", "")
+        if not brand_mentions(caption, [], config_for(db).brands):
+            summary["skipped"] += 1
+            continue
         title = caption.split("\n")[0][:500] or f"Instagram post by {post['account']}"
         outfit = parse_outfit(title, caption)
         eligible, _ = editorial_subject_eligibility(title, caption, outfit["celebrity"])
@@ -93,6 +101,7 @@ def run_instagram(db, settings, static_dir, target_date):
         asset_post = {"permalink": post["permalink"], "author": post["account"], "publisher": f"Instagram / {post['account']}", "image_urls": urls, "source_kind": "instagram_api"}
         case = Case(source_type="public_post_url", external_id=f"instagram:{post['id']}", permalink=post["permalink"], source_title=title, source_body=caption, celebrity=outfit["celebrity"], designer=outfit["designer"], event_name=outfit["event"], event_date=target_date.isoformat(), base_image=images[0], status="context_review", match_type="source_only", extraction={"source_platform": "Instagram", "source_publisher": asset_post["publisher"], "provider": "instagram_graph", "retrieved_at": retrieved, "source_image_urls": urls, "collage_assets": _collage_assets(asset_post, images, outfit, retrieved)})
         db.add(case)
+        case.extraction = {**case.extraction, "published_at": post["published"].isoformat()}
         db.flush()
         candidates = _add_matches(db, case, settings.media_dir)
         collage = render_draft_collage(db, case, candidates, settings, static_dir)

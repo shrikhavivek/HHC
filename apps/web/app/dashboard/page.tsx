@@ -6,6 +6,7 @@ import { EditorialDesk } from "@/components/editorial-desk";
 import { StudioBrand } from "@/components/studio-brand";
 import { MatchVerification } from "@/components/match-verification";
 import { OutfitContext } from "@/components/outfit-context";
+import { InstagramWatchlist } from "@/components/instagram-watchlist";
 import { useUndoHistory } from "@/lib/use-undo-history";
 
 type WorkspaceView = "today" | "women" | "men" | "both" | "pending" | "reviewed";
@@ -23,6 +24,9 @@ type Dashboard = {
   last_run?: { id: string; status: string; created_at: string } | null;
 };
 type CaseSummary = {
+  published_at?: string | null;
+  published_date?: string | null;
+  web_discovered?: boolean;
   context_revision?: number;
   id: string;
   title: string;
@@ -261,8 +265,8 @@ function belongsToView(item: CaseSummary, view: WorkspaceView) {
 }
 
 function newestPostFirst(left: CaseSummary, right: CaseSummary) {
-  const parsedLeftPostDate = left.event_date ? Date.parse(left.event_date) : Number.NaN;
-  const parsedRightPostDate = right.event_date ? Date.parse(right.event_date) : Number.NaN;
+  const parsedLeftPostDate = Date.parse(left.published_at || left.published_date || left.event_date || "");
+  const parsedRightPostDate = Date.parse(right.published_at || right.published_date || right.event_date || "");
   const leftPostDate = Number.isFinite(parsedLeftPostDate) ? parsedLeftPostDate : Number.NEGATIVE_INFINITY;
   const rightPostDate = Number.isFinite(parsedRightPostDate) ? parsedRightPostDate : Number.NEGATIVE_INFINITY;
   if (leftPostDate !== rightPostDate) return rightPostDate - leftPostDate;
@@ -1355,7 +1359,8 @@ export default function DashboardPage() {
 
       <EditorialDesk selected={selected} onRefresh={() => { if (showCollageEditor || showIntake || decisionMode) return; if (selected) void openCase(selected.id); void load(); }}/>
       {selected?.demo_data && <p className="edition-message">Demonstration case and placeholder photographs. Connect a source in Sources &amp; schedule to prepare real editorial images.</p>}
-      <div className="workbench-heading"><div><span className="workbench-kicker">THE EDITORIAL DESK</span><h2>The working edit.</h2></div><p>Today &amp; yesterday · Asia/Kolkata<span>Choose a look. Refine the details. Shape the story.</span></p></div>
+      <InstagramWatchlist onOpen={async caseId => { setWorkspaceView("today"); setFilter("all"); setSearch(""); await load(); await openCase(caseId); }}/>
+      <div className="workbench-heading"><div><span className="workbench-kicker">THE EDITORIAL DESK</span><h2>The working edit.</h2></div><p>Instagram &amp; Reddit: today &amp; yesterday · Websites: current week<span>Publication dates · Asia/Kolkata</span></p></div>
       <section className="workspace studio-workspace" id="daily-looks" tabIndex={-1} aria-label="Daily looks">
         <div className="queue-panel">
           <div className="panel-heading"><div><small>{meta.listKicker}</small><h2>{meta.listTitle}</h2></div><span className="queue-count">{visibleCases.length.toString().padStart(2, "0")}</span></div>
@@ -1365,7 +1370,7 @@ export default function DashboardPage() {
             {loading && <div className="queue-loading" role="status"><span>Preparing your edit…</span>{[0, 1, 2].map(index => <div className="skeleton-case" key={index} aria-hidden="true"><i/><div><b/><b/><b/></div></div>)}</div>}
             {!loading && visibleCases.map((item, index) => <button type="button" key={item.id} aria-pressed={selected?.id === item.id} className={`case-card ${selected?.id === item.id ? "current" : ""}`} onClick={() => void openCase(item.id)}>
               <span className="case-index">{(index + 1).toString().padStart(2, "0")}</span><div className="case-thumb"><img src={asset(item.base_image)} alt={`${item.celebrity} in ${item.designer}`}/></div>
-              <div className="case-copy"><div><StatusPill status={item.status}/><span className={`fashion-chip fashion-${item.fashion_category}`}>{fashionCategoryLabel(item.fashion_category)}</span><span className={`risk risk-${item.risk_level}`}>{item.risk_level}</span></div><strong>{item.celebrity}</strong><p>{item.designer} · {item.event_name}</p><footer><span>{item.event_date || "Date unresolved"}</span><b>{Math.round(item.confidence * 100)}% signal</b></footer></div><Icon name="arrow" size={15}/>
+              <div className="case-copy"><div><StatusPill status={item.status}/><span className={`fashion-chip fashion-${item.fashion_category}`}>{fashionCategoryLabel(item.fashion_category)}</span><span className={`risk risk-${item.risk_level}`}>{item.risk_level}</span></div><strong>{item.celebrity}</strong><p>{item.designer} · {item.event_name}</p><footer><span>{item.published_date ? `Published ${item.published_date}` : item.event_date || "Date unresolved"}</span><b>{Math.round(item.confidence * 100)}% signal</b></footer></div><Icon name="arrow" size={15}/>
             </button>)}
             {!loading && !loadError && !visibleCases.length && <div className="empty enhanced-empty"><Icon name="search"/><strong>{search ? "No looks match your search" : "A fresh edit starts here"}</strong><span>{search ? "Try another celebrity, designer or event, or clear your filters." : "No recent looks in this view yet. Import a public post or check another fashion desk."}</span><button type="button" className="ghost" onClick={() => { setSearch(""); setFilter("all"); }}>Reset view</button></div>}
           </div>
@@ -1374,7 +1379,7 @@ export default function DashboardPage() {
         <div className="review-panel">
           {!selected ? <div className="review-empty"><span>HHC</span><h2>No outfit selected</h2><p>Choose a look from the rail to open its editorial file.</p></div> : <>
             <div className="review-heading"><div className="review-identity"><img className="review-portrait" src={asset(selected.base_image)} alt=""/><div><div className="review-meta"><StatusPill status={selected.status}/><span className={`fashion-chip fashion-${selected.fashion_category}`}>{selected.fashion_category === "unclassified" ? "Content desk open" : fashionCategoryLabel(selected.fashion_category)}</span>{selected.demo_data && <span className="demo-chip">Demonstration</span>}</div><h2>{selected.celebrity}</h2><p>{selected.event_name}</p></div></div><div className="review-heading-actions"><div className="category-editor"><small>Content listing</small><div>{(["women", "men", "mixed"] as const).map(category => <button type="button" key={category} className={selected.fashion_category === category ? "active" : ""} onClick={() => void updateFashionCategory(category)} disabled={categoryBusy}>{category === "mixed" ? "Both" : pretty(category)}</button>)}</div></div><a className="source-link" href={selected.permalink} target="_blank" rel="noreferrer"><Icon name="external"/>{selected.source_type === "reddit_rss" ? "Reddit source" : "Public source"}</a></div></div>
-            <dl className="look-facts"><div><dt>Designer</dt><dd>{selected.designer}</dd></div><div><dt>Appearance</dt><dd>{selected.event_date || "Date to verify"}</dd></div><div><dt>Discovery signal</dt><dd>{Math.round(selected.confidence * 100)}%<span>Not editorial verification</span></dd></div></dl>
+            <dl className="look-facts"><div><dt>Designer</dt><dd>{selected.designer}</dd></div><div><dt>{selected.published_date ? "Post published" : "Appearance"}</dt><dd>{selected.published_date || selected.event_date || "Date to verify"}{selected.web_discovered && <span>Source publication date</span>}</dd></div><div><dt>Discovery signal</dt><dd>{Math.round(selected.confidence * 100)}%<span>Not editorial verification</span></dd></div></dl>
 
             <OutfitContext key={selected.id} selected={selected} onSaved={() => void openCase(selected.id)}/>
             {candidate && <MatchVerification key={candidate.id} candidateId={candidate.id} currentDate={selected.event_date} earlierDate={candidate.event_date} onVerified={() => void openCase(selected.id)}/>}

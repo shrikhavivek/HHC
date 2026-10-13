@@ -1,0 +1,65 @@
+.web-discovery { margin: 24px 0; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); }
+.web-discovery > summary { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 22px 24px; cursor: pointer; }
+.web-discovery > summary > span:first-child { display: grid; gap: 6px; }
+.web-discovery > summary strong { font: 500 30px/1.2 "Cormorant Garamond", Georgia, serif; color: var(--ink); }
+.web-discovery > summary small { color: var(--muted); letter-spacing: .07em; }
+.web-week-badge { flex-shrink: 0; padding: 8px 12px; border-radius: 30px; background: var(--canvas); color: var(--wine); font-size: 14px; }
+.web-discovery-content { padding: 0 24px 24px; }
+.web-discovery-content p { margin: 0 0 16px; }
+.instagram-watchlist form { display: grid; gap: 16px; }
+.instagram-watchlist textarea { width: 100%; min-width: 0; resize: vertical; padding: 14px; border: 1px solid var(--line); border-radius: 6px; background: var(--canvas); color: var(--ink); font: inherit; font-size: 16px; line-height: 1.6; }
+.instagram-watchlist .instagram-enable { display: flex; align-items: center; gap: 12px; }
+.web-discovery.instagram-watchlist .instagram-enable input[type=checkbox] { flex: 0 0 20px; width: 20px; height: 20px; min-height: 20px; padding: 0; margin: 0; }
+.web-search-form { display: flex; align-items: flex-end; gap: 16px; }
+.web-discovery label { display: grid; gap: 8px; color: var(--ink); flex: 1; min-width: 0; }
+.web-discovery input:not([type=hidden]), .web-discovery select { width: 100%; min-width: 0; min-height: 48px; border: 1px solid var(--line); border-radius: 6px; padding: 12px; color: var(--ink); background: var(--canvas); }
+.web-search-form .web-source-select { flex: 0 1 200px; }
+.web-exclusions { margin-bottom: 18px; color: var(--muted); }
+.web-exclusions summary { cursor: pointer; padding-block: 8px; color: var(--ink); }
+.web-exclusions li { margin-block: 8px; font-size: 15px; line-height: 1.6; }
+.web-discovery button { min-height: 48px; white-space: normal; }
+.web-discovery :is(input, button, summary, a):focus-visible { outline: 2px solid var(--wine); outline-offset: 3px; }
+.studio-shell[data-theme] .web-discovery .web-discovery-note { margin: 14px 0; color: var(--muted); font-size: 14px; }
+.web-discovery-error { padding: 14px; border: 1px solid #b98498; border-radius: 6px; color: #ffd3df; background: #472c38; }
+.web-results-heading { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; padding: 20px 0; border-top: 1px solid var(--line); }
+.web-results-heading span { color: var(--muted); font-size: 14px; }
+.web-results-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.web-result { display: grid; align-content: start; gap: 14px; min-width: 0; padding: 22px; border: 1px solid var(--line); border-radius: 8px; background: var(--canvas); overflow-wrap: anywhere; }
+.web-result h3 { margin: 0; color: var(--ink); font: 500 28px/1.2 "Cormorant Garamond", Georgia, serif; }
+.web-result p { margin: 0; }
+.web-result-meta { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 14px; color: var(--muted); }
+.web-result time { color: var(--wine); }
+.web-result a { color: var(--wine); text-decoration: underline; text-underline-offset: 4px; }
+.web-result :is(form, details[open]), .web-url-check form { display: grid; gap: 14px; }
+.web-result details summary, .web-url-check > summary { cursor: pointer; color: var(--ink); padding-block: 8px; font-size: 15px; }
+.web-imported { color: #a2ddc2; }
+.web-url-check { margin-top: 22px; padding-top: 14px; border-top: 1px solid var(--line); }
+.web-url-check form { margin-top: 14px; }
+.instagram-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; padding: 28px 24px 18px; }
+.instagram-heading small { color: var(--wine); letter-spacing: .12em; font-size: 12px; }
+.instagram-heading h2 { margin: 8px 0 12px; color: var(--ink); font: 500 36px/1.2 "Cormorant Garamond", Georgia, serif; }
+.instagram-heading p { margin: 0; max-width: 65ch; color: var(--muted); }
+.instagram-scan-bar { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 20px; background: var(--canvas); border: 1px solid var(--line); border-radius: 8px; }
+.instagram-scan-bar p { margin: 8px 0 0; color: var(--muted); font-size: 15px; }
+.instagram-scan-bar button { flex-shrink: 0; }
+.instagram-progress { display: grid; gap: 8px; padding: 22px 0; }
+.instagram-progress span { color: var(--muted); font-size: 15px; }
+.instagram-empty { padding: 26px; border: 1px dashed var(--line); border-radius: 8px; }
+.instagram-empty p { margin: 12px 0 0; color: var(--muted); }
+.instagram-filter { margin-bottom: 18px; }
+.instagram-photo img { width: 100%; height: 320px; object-fit: contain; background: var(--paper); border-radius: 6px; }
+.instagram-settings { padding: 18px 0; border-bottom: 1px solid var(--line); margin: 0; }
+.instagram-settings > summary { cursor: pointer; color: var(--ink); padding: 6px 0; }
+.instagram-settings[open] > summary { margin-bottom: 16px; }
+@media (max-width: 940px) {
+  .web-results-grid { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 640px) {
+  .instagram-heading, .instagram-scan-bar { flex-direction: column; }
+  .instagram-heading { padding: 22px 18px; }
+  .instagram-scan-bar button { width: 100%; }
+  .web-discovery > summary { align-items: flex-start; flex-direction: column; padding: 18px; }
+  .web-discovery-content { padding: 0 18px 18px; }
+  .web-search-form { display: grid; gap: 14px; }
+  .web-result { padding: 16px; }
+}

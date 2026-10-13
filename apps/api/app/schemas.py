@@ -31,6 +31,17 @@ class SourceUrlIntake(BaseModel):
     editor_id: str = Field(default="editor@atelier", min_length=2, max_length=120)
 
 
+class WebDiscoveryQuery(BaseModel):
+    query: str = Field(default="", max_length=180)
+    source: Literal["instagram", "web"] = "instagram"
+
+
+class WebDiscoveryImport(BaseModel):
+    source_url: HttpUrl
+    celebrity: str = Field(default="", max_length=180)
+    designer: str = Field(default="", max_length=180)
+
+
 class DecisionInput(BaseModel):
     decision: DecisionType
     reason: str = Field(min_length=12, max_length=2000)

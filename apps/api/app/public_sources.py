@@ -112,15 +112,19 @@ def _fetch_limited(
     maximum_bytes: int,
     accept: str,
     referer: str | None = None,
+    timeout: int = 25,
+    check_access=None,
 ) -> tuple[str, bytes, str]:
     url = raw_url
     for _ in range(5):
         url = _validated_url(url, allowed_domains=allowed_domains, source_document=source_document)
+        if check_access:
+            check_access(url)
         headers = {"User-Agent": user_agent, "Accept": accept}
         if referer:
             headers["Referer"] = referer
         try:
-            with public_get(url, headers=headers, timeout=25, stream=True, allow_redirects=False) as response:
+            with public_get(url, headers=headers, timeout=timeout, stream=True, allow_redirects=False) as response:
                 if response.status_code in REDIRECT_STATUSES:
                     location = response.headers.get("Location")
                     if not location:

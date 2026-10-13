@@ -50,6 +50,149 @@ database connectivity.
 6. Confirm the reviewed collage's attribution and usage rights, save the story,
    then **Send WordPress draft**. Finish publication or scheduling in WordPress.
 
+### Legacy public-web discovery API
+
+The dashboard now has one **Discover Instagram posts** panel, using the signed-in
+local browser collector described below. It no longer shows a separate public-web
+Instagram search. The legacy `/api/discovery/web/search` and `/import` endpoints
+remain available to authenticated API clients. The `instagram` source searches
+indexed Instagram URLs; `web` uses general search and public publisher feeds.
+This feature uses public HTML search and publisher feeds, without an Instagram
+account, token, handle watchlist, or paid scraping service. Search challenges,
+login walls and HTTP access denials are not bypassed. Instagram uses the public HTTP
+reader also used by the existing URL importer; other publishers use robots-aware
+browsing. Coverage is best-effort: search indexing can lag and Instagram may block
+public access. Failures and excluded-date counts are reported rather than hidden.
+Public fashion feeds are checked only in **Fashion websites** mode.
+If discovery cannot reach any search source, the API returns HTTP 503 with
+**Search unavailable**, not a misleading zero-results message. Partial
+searches are labeled incomplete. Successful search-link lists are cached in each
+API process for 15 minutes (up to 128 queries); publication dates are still checked
+on the source pages on every scan and import. A browser challenge pauses new search
+requests for five minutes to avoid repeated blocked requests. These measures do
+not remove challenges or guarantee access; retries may still fail. Process restarts
+clear the cache and cooldown.
+Set `WEB_DISCOVERY_FEEDS` to a comma-separated list of public HTTPS RSS/Atom feeds
+to customize the fallback sources (up to four per scan).
+
+Instagram discovery now accepts only **today and yesterday** by publication date.
+Other websites use the **current Monday–Sunday calendar week**, in
+`REDDIT_DAILY_TIMEZONE` (default `Asia/Kolkata`).
+The page's `datePublished`, publication metadata or explicitly marked published
+time is used, not search-result dates, retrieval time, or `dateModified`. For public
+Instagram pages without structured timestamps, the platform-generated caption
+header (`username on Month Day, Year:`) supplies the publication day. Dates mentioned
+inside the caption body are not treated as publication dates.
+Missing, conflicting, timezone-ambiguous timestamps and future dates are excluded.
+A date without a time is treated as that local calendar day and labeled as such.
+An article's publication date does not prove the embedded Instagram post or outfit
+appearance is equally recent; the original source link remains available for review.
+
+Results include publication dates and can be imported into the existing collage
+and editorial workflow. A public URL can also be checked directly. The server
+re-fetches and checks the date before import; client-provided dates are never trusted.
+Website imports remain visible for that week; Instagram and Reddit remain visible
+for today/yesterday, then leave the current desk without being deleted. Publication dates are
+stored separately from editable appearance dates. Rights and attribution still need
+editorial review before publishing. Scans are on demand and bounded to 12 pages.
+
+### Local browser-assisted Instagram trial
+
+From `apps/web`, run `npm run instagram:browser` with dependencies installed and
+Microsoft Edge available. Sign in yourself in the separate visible browser window;
+never paste passwords into the terminal, chat, or repository. The dedicated browser
+profile retains session data under `%LOCALAPPDATA%/HHC/instagram-browser-profile`
+on Windows, outside this repository. Treat that local folder as sensitive and do not
+share or commit it. Sign out in the browser to stop reusing the account session.
+
+The terminal accepts `open <public-handle>`, `post <shortcode>`, `check`, `inspect`,
+and `close`. `inspect` reports rendered dates with their linked permalinks and image
+dimensions on an individual post; these must be reviewed, not assumed to belong to
+the source rather than comments or suggestions. A check lists at
+most 12 currently rendered post links without scrolling, screenshotting, importing,
+or scheduling anything. Reel links are excluded; dates and media types are not yet
+verified. Sign-in, verification and restriction screens stop inspection. This is an
+access feasibility trial, not a guarantee of authorized or uninterrupted collection.
+The browser closes after 30 minutes; the profile remains for subsequent local use.
+
+### Daily local Instagram watchlist
+
+The dashboard's single **Discover Instagram posts** panel shows collected photo
+cards, publication dates, brand evidence, and an **Open editable draft** action.
+**Scan now** queues a live scan of every enabled account in the saved watchlist;
+progress and new photos refresh automatically every five seconds. It does not use
+public search or require a post URL. A name/brand filter searches collected photos.
+Watchlist and brand configuration are collapsed under **Watchlist settings**.
+
+The panel manages an editable starter list of 16
+celebrity accounts and a brand/designer registry. This is not a complete directory
+of Bollywood, and configured handles should be reviewed. Up to 200 accounts can be
+configured. An arbitrary @mention (stylist, photographer, friend) does not qualify:
+the caption or readable on-photo tag must match a configured brand name, alias or
+exact handle. Unknown labels are excluded until added to the registry.
+
+Run `npm run instagram:daily` from `apps/web` for one local collection pass. For a
+non-importing trial: `npm run instagram:daily -- --dry-run --handle kritisanon`.
+The collector uses the separate Edge session created by `instagram:browser`;
+close that trial window before collection. Cookies stay under your Windows user
+profile and never go to Docker or GitHub. The collector reads the existing local
+`.env` editor API key privately and only sends approved post metadata and photo
+captures to the loopback API. No Instagram password is stored in application config.
+
+Install the daily **09:00 India-time** task from PowerShell:
+
+```powershell
+& .\apps\web\scripts\install-instagram-task.ps1
+```
+
+Task Scheduler entries: `HHC Instagram Daily` (09:00) and `HHC Instagram Requests`
+(checks for dashboard requests every minute). Re-run the installer after upgrading
+to add the request task. Start `HHC Instagram Requests` in Task Scheduler to connect
+immediately; otherwise its first check occurs within a minute. Polling only contacts
+the local API; Instagram opens only for a queued or scheduled scan. Queued requests
+expire after three minutes offline rather than unexpectedly running hours later.
+Overlapping requests reuse the active scan. The UI reports an offline collector
+instead of claiming a scan has started. Both tasks use a hidden console launcher;
+the Instagram browser itself remains visible for inspection.
+
+Windows timezone must be India
+Standard Time. The task runs only while this Windows user is signed in; the computer
+must be awake with Docker and the application running. Missed starts may run later
+when available. No elevated account or saved Windows password is needed. Pause
+intake in the dashboard, or disable the task with
+`Disable-ScheduledTask -TaskName 'HHC Instagram Daily'`.
+
+Each scan is bounded to two profile scrolls and up to 12 photo-post links per
+account; pinned posts do not stop date inspection of other collected links. Reels,
+videos, unknown dates, future dates, dates before yesterday, mismatched authors and
+unrecognized brand mentions are excluded. Only a timestamp linked to the actual
+post permalink qualifies, not a comment date. A screenshot is cropped to an image
+matching the post's own Open Graph cover; suggested-post photos are not fallback
+sources. Photo slides are captured from the same carousel. Tags are used only
+when an accessible on-photo tag overlay can be read; unexposed tags can be missed.
+
+The server rechecks date and brand eligibility and validates image bytes before
+creating an editable source-only collage. Carousel photo slides are captured in
+order through the post's own Next control, up to 20 slides and 22 MB per upload;
+video slides are skipped. Navigation is scoped to the verified cover's image frame,
+never recommendation cards. Incomplete/stalled carousels are labelled rather than
+reported as complete. Source-image identifiers prevent repeat panels. Existing
+cover-only drafts are expanded in place, with their saved adjustments retained and
+new photo panels appended. Partial rechecks never shrink an existing gallery.
+The feed shows the collage preview and collected-photo count.
+
+Existing permalinks are deduplicated;
+existing outfit grouping continues to apply. Brand mentions are not proof of outfit
+attribution, so imports remain in context review. Designer-reference photos are not
+automatically invented or attached based on a tag alone. Nothing is auto-published.
+Older posts leave the active desk but remain in the archive.
+
+The dashboard reports checked accounts, checked posts, exclusions and imported
+counts. Blocks stop the entire run; there is no CAPTCHA solver, proxy rotation or
+automatic login. Reopen `instagram:browser` yourself to resolve session expiry.
+This local collector is independent of the Docker Reddit/Graph worker and cannot
+promise complete daily coverage or uninterrupted Instagram access.
+
 ### Collage tools
 
 - Reorder with drag and drop or keyboard-accessible move buttons.

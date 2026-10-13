@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -37,6 +38,10 @@ from .edition_window import in_current_edition
 from .outfit_posts import group_outfit_posts
 from .models import AuditEvent, Candidate, Case, Collage, Decision, JobRun
 from .public_sources import DuplicatePublicSourceError, PublicSourceError
+from .publication_dates import publication_stamp
+from .web_discovery import discover_weekly_posts, inspect_weekly_post
+from .providers import ProviderDeferred, before_request
+from .schemas import WebDiscoveryImport, WebDiscoveryQuery
 from .schemas import CollageEditInput, CollageInput, DecisionInput, FashionCategoryInput, ManualIntake, SourceUrlIntake
 from .seed import seed_database
 from .security import PrivateAPIMiddleware, current_actor
@@ -44,6 +49,7 @@ from .review import approval_errors
 from .editorial import router as editorial_router
 from .wordpress import router as wordpress_router
 from .worker import router as worker_router
+from .instagram_browser import router as instagram_browser_router
 
 
 settings = get_settings()
@@ -95,6 +101,12 @@ def _watermark_editor_state(extraction: dict, edit: dict) -> tuple[dict | None, 
 
 
 def case_json(case: Case, detail=False):
+    extraction = case.extraction or {}
+    published_at = extraction.get("published_at")
+    try:
+        published_date = publication_stamp(published_at, settings.reddit_daily_timezone)[0].astimezone(ZoneInfo(settings.reddit_daily_timezone)).date().isoformat()
+    except (ValueError, TypeError, OverflowError):
+        published_date = None
     data = {
         "id": case.id, "title": case.source_title, "body": case.source_body, "permalink": case.permalink,
         "context_revision": (case.extraction or {}).get("context_revision", 0),
@@ -102,6 +114,8 @@ def case_json(case: Case, detail=False):
         "status": case.status, "match_type": case.match_type, "confidence": case.confidence, "risk_level": case.risk_level,
         "base_image": case.base_image, "demo_data": case.demo_data, "source_type": case.source_type,
         "fashion_category": case_fashion_category(case), "created_at": case.created_at.isoformat(),
+        "published_at": published_at, "published_date": published_date,
+        "web_discovered": bool(extraction.get("web_discovered")),
     }
     if detail:
         data["extraction"] = case.extraction
@@ -206,6 +220,7 @@ app.mount("/media-files", StaticFiles(directory=settings.media_dir), name="media
 app.include_router(editorial_router)
 app.include_router(wordpress_router)
 app.include_router(worker_router)
+app.include_router(instagram_browser_router)
 
 
 @app.get("/health")
@@ -349,6 +364,37 @@ def source_url_intake(payload: SourceUrlIntake, db: Session = Depends(get_db)):
     except DuplicatePublicSourceError as exc:
         raise HTTPException(409, str(exc)) from exc
     except PublicSourceError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except AutomationError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+
+@app.post("/api/discovery/web/search", dependencies=[Depends(require_editor)])
+def web_discovery_search(payload: WebDiscoveryQuery, db: Session = Depends(get_db)):
+    try:
+        before_request("web-discovery", spacing=15)
+        result = discover_weekly_posts(payload.query.strip(), settings, source=payload.source)
+        if result["search_status"] == "unavailable":
+            raise HTTPException(503, "Search unavailable — no posts were checked. " + " ".join(result["warnings"]), headers={"Retry-After": "300"})
+        existing = {case.permalink: case.id for case in db.scalars(select(Case)).all()}
+        for item in result["results"]:
+            item["existing_case_id"] = existing.get(item["permalink"])
+        return result
+    except ProviderDeferred as exc:
+        raise HTTPException(429, str(exc), headers={"Retry-After": "15"}) from exc
+
+
+@app.post("/api/discovery/web/import", status_code=201, dependencies=[Depends(require_editor)])
+def web_discovery_import(payload: WebDiscoveryImport, db: Session = Depends(get_db)):
+    try:
+        before_request("web-discovery-import", spacing=5)
+        source = inspect_weekly_post(str(payload.source_url), settings.reddit_daily_timezone)
+        return import_public_post_automation(db, {**payload.model_dump(mode="json"), "editor_id": current_actor()}, settings, STATIC_DIR, verified_source=source)
+    except ProviderDeferred as exc:
+        raise HTTPException(429, str(exc), headers={"Retry-After": "5"}) from exc
+    except DuplicatePublicSourceError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except (PublicSourceError, ValueError) as exc:
         raise HTTPException(422, str(exc)) from exc
     except AutomationError as exc:
         raise HTTPException(502, str(exc)) from exc
