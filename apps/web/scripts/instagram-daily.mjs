@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { postIdentity, qualifyPost, readPostDocument } from "./instagram-daily-rules.mjs";
 import { captureCarousel } from "./instagram-carousel.mjs";
+import { runHashtagSearch } from "./instagram-hashtags.mjs";
 
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 let environment = {};
@@ -40,6 +41,10 @@ async function accessCheck(page) {
 const queued = process.argv.includes("--queued");
 const claimed = queued ? (await request("/claim", {})).run : null;
 if (queued && !claimed) process.exit(0);
+if (claimed?.kind === "hashtag_search") {
+  const result = await runHashtagSearch(claimed, { request });
+  process.exit(["failed", "blocked"].includes(result.status) ? 1 : 0);
+}
 const config = await request("/config");
 if (config.timezone !== "Asia/Kolkata") throw new Error("This local collector currently requires Asia/Kolkata.");
 const summary = { run_id: claimed?.run_id || randomUUID(), status: "running", accounts_checked: 0, posts_checked: 0, imported: 0, updated: 0, detail: "Collecting photo posts and carousel slides from the signed-in Instagram browser.", exclusions: {}, current_account: "", accounts_total: 0, dry_run: dryRun };

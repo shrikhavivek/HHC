@@ -7,6 +7,7 @@ import { StudioBrand } from "@/components/studio-brand";
 import { MatchVerification } from "@/components/match-verification";
 import { OutfitContext } from "@/components/outfit-context";
 import { InstagramWatchlist } from "@/components/instagram-watchlist";
+import { InstagramHashtagResearch } from "@/components/instagram-hashtag-research";
 import { useUndoHistory } from "@/lib/use-undo-history";
 
 type WorkspaceView = "today" | "women" | "men" | "both" | "pending" | "reviewed";
@@ -844,9 +845,12 @@ export default function DashboardPage() {
   const [editorBusy, setEditorBusy] = useState(false);
   const [editorExportScale, setEditorExportScale] = useState(1);
   const [uploadBusy, setUploadBusy] = useState(false);
+  const [uploadSourceUrl, setUploadSourceUrl] = useState("");
+  const [uploadFromResearch, setUploadFromResearch] = useState(false);
   const [watermarkBusy, setWatermarkBusy] = useState(false);
   const [categoryBusy, setCategoryBusy] = useState(false);
   const [profile, setProfile] = useState<{ username: string; demo: boolean } | null>(null);
+  useEffect(() => { setUploadSourceUrl(""); setUploadFromResearch(false); }, [selected?.id]);
   const caseRequest = useRef(0);
   const editorSnapshot = { panelIds: editorPanelIds, options: editorPanelOptions, format: editorCanvasFormat, layout: editorLayoutTemplate, adjustments: editorCollageAdjustments, watermark: editorWatermark, scale: editorExportScale };
   const editorOriginal = useRef("");
@@ -1382,6 +1386,7 @@ export default function DashboardPage() {
             <dl className="look-facts"><div><dt>Designer</dt><dd>{selected.designer}</dd></div><div><dt>{selected.published_date ? "Post published" : "Appearance"}</dt><dd>{selected.published_date || selected.event_date || "Date to verify"}{selected.web_discovered && <span>Source publication date</span>}</dd></div><div><dt>Discovery signal</dt><dd>{Math.round(selected.confidence * 100)}%<span>Not editorial verification</span></dd></div></dl>
 
             <OutfitContext key={selected.id} selected={selected} onSaved={() => void openCase(selected.id)}/>
+            <InstagramHashtagResearch key={`${selected.id}:${selected.context_revision || 0}`} caseId={selected.id} onAddSource={url => { setUploadSourceUrl(url); setUploadFromResearch(true); openCollageEditor(); }}/>
             {candidate && <MatchVerification key={candidate.id} candidateId={candidate.id} currentDate={selected.event_date} earlierDate={candidate.event_date} onVerified={() => void openCase(selected.id)}/>}
             {selected.latest_collage && <section className="automatic-draft-card">
               <div className="automatic-draft-image"><img src={asset(selected.latest_collage.preview_url)} alt={`Automatic collage for ${selected.celebrity}`}/><span>Generated automatically</span></div>
@@ -1485,12 +1490,12 @@ export default function DashboardPage() {
             onUpload={uploadWatermark}
             uploadBusy={watermarkBusy}
           />
-          <details className="editor-upload-panel">
+          <details className="editor-upload-panel" open={uploadSourceUrl ? true : undefined}>
             <summary><span><Icon name="upload" size={15}/><b>Upload your own image</b></span><small>JPEG, PNG or WebP · up to 20 MB</small></summary>
             <form onSubmit={uploadCollageImage}>
               <label className="upload-file"><span>Choose image</span><input name="image" type="file" accept="image/jpeg,image/png,image/webp" required disabled={uploadBusy}/></label>
-              <div className="upload-form-row"><label>Panel label<input name="label" defaultValue="Editor-supplied comparison" maxLength={180} required disabled={uploadBusy}/></label><label>Person/model<input name="person" placeholder={selected.celebrity} maxLength={180} disabled={uploadBusy}/></label></div>
-              <label>Original source URL <em>optional</em><input name="source_url" type="url" placeholder="https://…" disabled={uploadBusy}/></label>
+              <div className="upload-form-row"><label>Panel label<input name="label" defaultValue="Editor-supplied comparison" maxLength={180} required disabled={uploadBusy}/></label><label>Person/model<input name="person" placeholder={uploadFromResearch ? "Identify the wearer or model" : selected.celebrity} required={uploadFromResearch} maxLength={180} disabled={uploadBusy}/></label></div>
+              <label>Original source URL <em>optional</em><input name="source_url" type="url" placeholder="https://…" value={uploadSourceUrl} onChange={event => setUploadSourceUrl(event.target.value)} disabled={uploadBusy}/></label>
               <label>Image credit<input name="credit" placeholder="Photographer, agency, publication or owner" maxLength={300} required disabled={uploadBusy}/></label>
               <label className="rights-confirm"><input name="rights_confirmed" type="checkbox" value="true" required disabled={uploadBusy}/><span>I confirm this image may be stored and used in an internal editorial draft. Publishing rights will still be reviewed.</span></label>
               <button type="submit" disabled={uploadBusy}><Icon name={uploadBusy ? "refresh" : "upload"} size={14}/>{uploadBusy ? "Uploading…" : "Upload & add panel"}</button>

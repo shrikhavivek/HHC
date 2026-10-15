@@ -50,6 +50,7 @@ from .editorial import router as editorial_router
 from .wordpress import router as wordpress_router
 from .worker import router as worker_router
 from .instagram_browser import router as instagram_browser_router
+from .instagram_hashtags import router as instagram_hashtags_router
 
 
 settings = get_settings()
@@ -221,6 +222,7 @@ app.include_router(editorial_router)
 app.include_router(wordpress_router)
 app.include_router(worker_router)
 app.include_router(instagram_browser_router)
+app.include_router(instagram_hashtags_router)
 
 
 @app.get("/health")
