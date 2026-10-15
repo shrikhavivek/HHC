@@ -200,6 +200,9 @@ def claim_scan(db: Session = Depends(get_db)):
             claimed = state.value
         else:
             state.value = {**state.value, "status": "paused", "detail": "Intake was paused before collection started."}
+        if state.value.get("kind") == "hashtag_search":
+            saved = locked_state(db, "instagram-hashtags:" + state.value["case_id"], {})
+            saved.value = state.value
     db.commit()
     return {"run": claimed}
 

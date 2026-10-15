@@ -153,7 +153,7 @@ test("editorial polish stays dark even with a previously saved light preference"
   await expect(page.getByRole("button", { name: "Light", exact: true })).toHaveCount(0);
   await page.reload();
   await expect(page.locator(".studio-shell")).toHaveAttribute("data-theme", "dark");
-  await ready();
+  await expect(page.getByRole("button", { name: "Write story" })).toBeEnabled();
   await page.screenshot({ path: "test-results/theme-dark-desktop.png", fullPage: true });
   await page.getByRole("button", { name: "Write story" }).click();
   expect(await page.getByRole("dialog").evaluate(element => getComputedStyle(element).backgroundColor)).toBe("rgb(33, 30, 34)");

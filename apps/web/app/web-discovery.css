@@ -51,6 +51,16 @@
 .instagram-settings { padding: 18px 0; border-bottom: 1px solid var(--line); margin: 0; }
 .instagram-settings > summary { cursor: pointer; color: var(--ink); padding: 6px 0; }
 .instagram-settings[open] > summary { margin-bottom: 16px; }
+.instagram-hashtag-research > summary strong { font-size: 26px; }
+.hashtag-suggestions { display: flex; flex-wrap: wrap; gap: 10px; margin: 18px 0; }
+.hashtag-suggestions > div { display: flex; align-items: center; max-width: 100%; border: 1px solid var(--line); border-radius: 6px; background: var(--canvas); }
+.hashtag-suggestions a { padding: 12px; color: var(--wine); overflow-wrap: anywhere; }
+.hashtag-suggestions button { border-left: 1px solid var(--line); padding: 8px 14px; }
+.hashtag-search-form { display: grid; gap: 14px; }
+.hashtag-google { display: grid; gap: 14px; margin: 22px 0; padding-top: 20px; border-top: 1px solid var(--line); }
+.hashtag-google a { color: var(--wine); overflow-wrap: anywhere; text-decoration: underline; text-underline-offset: 4px; }
+.hashtag-results { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--line); }
+.hashtag-results .web-result p { max-height: 240px; overflow-y: auto; white-space: pre-wrap; }
 @media (max-width: 940px) {
   .web-results-grid { grid-template-columns: minmax(0, 1fr); }
 }

@@ -13,3 +13,4 @@ trial-output/
 *.tsbuildinfo
 test-results/
 playwright-report/
+/docs/auth-bypass.md

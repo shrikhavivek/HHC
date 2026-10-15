@@ -261,6 +261,47 @@ editor-selected source and permitted image upload. Videos are not converted into
 fabricated outfit photos. Live access cannot be verified without the client's
 Meta credentials and approvals.
 
+## Instagram outfit research
+
+Open a look and expand **Find similar looks on Instagram**. Suggestions use the
+recorded designer/maker and garment, colour, fabric or construction details from
+the source text. The source celebrity's name, name fragments and known Instagram
+handle are excluded, including from custom hashtags. Correct attribution first
+if the person or designer is unresolved.
+
+Click a hashtag to open Instagram directly, or select up to six hashtags and use
+**Search signed-in Instagram**. The existing local Instagram Requests task claims
+the search through `instagram:daily -- --queued`; it shares the same browser
+profile and permits only one intake/research run at a time. The collector checks
+up to eight photo-post links per hashtag with one scroll, returns at most 24
+research leads, and stops on access restrictions. It returns links and captions,
+without downloading photos or modifying the collage. Instagram may redirect tag
+pages or expose no readable posts; incomplete searches are reported.
+
+Selected hashtags stack as an **AND filter**: every selected hashtag must appear
+in the same post's caption. Matching is case-insensitive and uses exact hashtag
+boundaries; plain keywords or longer hashtags are not substitutes. Individual
+Instagram links preview one hashtag; the studio filters collected posts against
+the complete combination. It never broadens to partial matches when no post
+qualifies.
+
+Generated Google links combine every selected hashtag with
+`site:instagram.com/p/` and negative celebrity terms. They work without an app
+connection. **Get Google results here** uses the existing `SERPAPI_KEY` setting;
+it searches the combination, checks up to ten original post captions, and caches
+successful results for that combination for 15 minutes. Google snippets alone
+do not qualify: inaccessible captions and posts missing any selected hashtag
+are excluded. Garment identity and post dates still need review. Editing the
+combination hides previous results until a new search applies those filters.
+
+This research includes older posts and is separate from today's/yesterday's
+Instagram intake. Celebrity mentions and duplicate post links are filtered, but
+unlabelled reposts can still appear. Open the original post to compare the actual
+garment. **Add a credited photo** opens the collage upload panel with the source
+URL filled in; supply an authorized image, person and credit through the normal
+editor workflow. No search result is automatically treated as a confirmed clone.
+Changing outfit context hides old search results and requires a new search.
+
 ## Daily editions
 
 `DAILY_AUTOMATION_ENABLED=true` enables scheduled intake.
