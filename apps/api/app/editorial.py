@@ -104,7 +104,7 @@ def login_attempt(payload: LoginAttempt, db: Session = Depends(get_db)):
     return {"ok": True}
 
 class StoryInput(BaseModel):
-    title: str = Field(min_length=1, max_length=300)
+    title: str = Field(default="", max_length=300)
     body: str = Field(default="", max_length=20000)
     alt_text: str = Field(default="", max_length=1000)
     credits: str = Field(default="", max_length=3000)

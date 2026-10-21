@@ -3,7 +3,8 @@ import { createSession, EditorSession, verifySession } from "@/lib/session";
 import { editorAccount } from "@/lib/editor-auth";
 
 export const HANDOFF_COOKIE = "hhc_wordpress_handoff";
-export type Handoff = EditorSession & { purpose: "wordpress-handoff"; caseId: string; returnOrigin: string; callbackOrigin: string; wpSite: string; authorizeUrl: string };
+export const PENDING_COOKIE = "hhc_wordpress_pending";
+export type Handoff = EditorSession & { purpose: "wordpress-handoff"; caseId: string; returnOrigin: string; callbackOrigin: string; wpSite: string; authorizeUrl: string; wpUsername?: string; wpAuthorization?: string };
 export function wordpressSite() {
   const url = new URL(process.env.WORDPRESS_SITE_URL || "https://www.highheelconfidential.com");
   if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) throw new Error("Invalid WordPress site");
@@ -30,10 +31,14 @@ export function privateRedirect(url: URL | string) {
   response.headers.set("Referrer-Policy", "no-referrer");
   return response;
 }
-export function handoffResult(flow: Handoff | null, status: string) {
+export function resultUrl(flow: Handoff | null, status: string) {
   const url = new URL("/wordpress/result", flow?.returnOrigin || process.env.APP_ORIGIN || "http://localhost:3100");
   url.searchParams.set("status", status);
-  const response = privateRedirect(url);
+  if (flow) url.searchParams.set("case", flow.caseId);
+  return url;
+}
+export function handoffResult(flow: Handoff | null, status: string) {
+  const response = privateRedirect(resultUrl(flow, status));
   if (flow) response.cookies.set(HANDOFF_COOKIE, "", { ...handoffCookie(flow.callbackOrigin), maxAge: 0 });
   return response;
 }

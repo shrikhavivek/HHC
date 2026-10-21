@@ -1,4 +1,37 @@
 /* Editorial studio: quiet typography, generous controls, accessible motion. */
+.story-workspace { padding:24px 32px 32px; }
+.editorial-steps { display:flex; flex-wrap:wrap; gap:8px 18px; list-style:none; padding:0; margin:0 0 24px; font-size:12px; }
+.editorial-steps li { padding:7px 0; border-bottom:2px solid transparent; opacity:.65; }
+.editorial-steps li[aria-current=step] { border-color:currentColor; opacity:1; font-weight:700; }
+.story-workspace-heading { display:flex; align-items:center; justify-content:space-between; gap:16px; }
+.story-workspace-heading h3 { margin:0 0 12px; font:600 30px/1.2 "Cormorant Garamond",Georgia,serif; }
+.story-workspace-heading > span { font-size:12px; white-space:nowrap; }
+.story-workspace .story-edit-form { padding:12px 0 0; }
+.story-edit-form fieldset { margin:0; padding:0; border:0; min-width:0; }
+.story-edit-form fieldset label { margin:10px 0 8px; }
+.story-field-error { color:#a23b39; font-size:13px; line-height:1.5; margin:6px 0 14px; }
+.story-edit-form .story-field-error { min-height:1.5em; }
+.story-field-error:empty { visibility:hidden; }
+.studio-shell[data-theme=dark] .story-workspace .story-field-error { color:#ffb8ae; }
+.story-edit-form [aria-invalid=true] { border-color:#a23b39; }
+.story-review { max-width:780px; margin:20px auto 0; overflow-wrap:anywhere; }
+.story-review h2 { font:600 38px/1.15 "Cormorant Garamond",Georgia,serif; }
+.story-review figure { margin:20px 0; }
+.story-review figure img { display:block; width:100%; height:auto; border:0; border-radius:0; }
+.story-review figcaption { white-space:pre-wrap; font-size:13px; line-height:1.7; margin-top:10px; }
+.story-review-body { font:16px/1.8 Georgia,serif; white-space:pre-wrap; }
+.story-review .edition-check { display:flex; align-items:flex-start; gap:10px; margin:22px 0 10px; font-size:14px; line-height:1.7; }
+.story-review .edition-check input { flex-shrink:0; margin-top:5px; }
+.story-actions { display:flex; flex-wrap:wrap; gap:10px; margin:18px 0 12px; }
+.story-recovery { border-top:1px solid #aaa5; margin-top:24px; padding-top:12px; font-size:14px; }
+.story-workspace > .edition-message { margin:14px 0; }
+.wordpress-progress-card { position:relative; width:min(700px,calc(100% - 40px)); margin:60px auto; padding:clamp(24px,5vw,48px); border:1px solid #d8c4bc55; border-radius:14px; background:#2b2529; color:#fff8ef; }
+.wordpress-progress-card h1 { font:500 clamp(32px,5vw,48px)/1.15 "Cormorant Garamond",Georgia,serif; margin:18px 0; }
+.wordpress-progress-card p { font-size:16px; line-height:1.8; color:#ddd2ca; }
+.wordpress-progress-card a { text-decoration:none; }
+.wordpress-return-link { display:block; margin-top:24px; color:#e6c9b6; text-decoration:underline !important; }
+.instagram-progress progress { width:100%; height:8px; accent-color:#b39770; }
+@media(max-width:600px) { .story-workspace { padding:20px; } .editorial-steps { gap:4px 12px; font-size:11px; } .story-actions button { flex:1 1 auto; } }
 :root { --studio-wine: #7f2944; --studio-ink: #2a2027; --studio-blush: #f1e4df; }
 button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 3px solid #b1617b; outline-offset: 3px; }
 button:disabled { cursor: not-allowed; opacity: .5; }

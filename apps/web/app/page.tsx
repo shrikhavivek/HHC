@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { StudioBrand } from "@/components/studio-brand";
+import { loginDestination } from "@/lib/editorial-flow";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -16,8 +17,8 @@ export default function LoginPage() {
   }, [error]);
 
   useEffect(() => {
-    fetch("/api/auth/session").then(response => {
-      if (response.ok) router.replace("/dashboard");
+    fetch("/api/auth/session").then(async response => {
+      if (response.ok) router.replace(loginDestination((await response.json()).username));
     }).catch(() => { /* Login remains available if the session check fails. */ });
   }, [router]);
 
@@ -36,7 +37,7 @@ export default function LoginPage() {
       });
       const data = await response.json();
       if (!response.ok) return setError(data.detail || "The studio could not be opened. Please try again.");
-      router.replace("/dashboard");
+      router.replace(loginDestination(data.username));
     } catch {
       setError("The studio could not be reached. Please try again.");
     } finally {

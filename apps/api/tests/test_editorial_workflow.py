@@ -135,6 +135,26 @@ def test_algorithmic_identity_is_not_editorial_approval():
     assert not earlier_date(None, "2026-10-06")
     assert earlier_date("2020-01-01", "2026-10-06")
 
+
+def test_autosave_accepts_incomplete_story_but_handoff_still_requires_complete_fields(studio):
+    from app.wordpress import handoff_manifest
+    client, headers, factory = studio
+    render(client, headers)
+    path = "/api/cases/editorial-case/story"
+    response = client.post(path, headers=headers, json={"title": "", "body": "Work in progress", "expected_revision": 0})
+    assert response.status_code == 200
+    assert response.json()["title"] == ""
+    assert response.json()["revision"] == 1
+    assert client.get(path, headers=headers).json()["body"] == "Work in progress"
+    with factory() as db:
+        with pytest.raises(HTTPException) as error:
+            handoff_manifest(db, "editorial-case")
+        assert error.value.status_code == 422
+        assert "Add a title" in error.value.detail
+    stale = client.post(path, headers=headers, json={"title": "Stale edit", "expected_revision": 0})
+    assert stale.status_code == 409
+    assert client.get(path, headers=headers).json()["body"] == "Work in progress"
+
 def test_full_upstream_cooldown_is_respected():
     assert retry_seconds({"Retry-After": "600"}) == 600
     assert retry_seconds({"Retry-After": "60", "X-Ratelimit-Reset": "900"}) == 900

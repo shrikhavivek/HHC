@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { EditorialDesk, type EditorialDeskHandle } from "@/components/editorial-desk";
+import { readResume, rememberStory, storyDestination, validCaseId } from "@/lib/editorial-flow";
 import { StudioBrand } from "@/components/studio-brand";
 import { CroppedPhotoPreview } from "@/components/cropped-photo-preview";
 import { CollageLayoutPreview, useLayoutPreviews } from "@/components/collage-layout-preview";
@@ -845,6 +846,9 @@ export default function DashboardPage() {
   const [candidateIndex, setCandidateIndex] = useState(0);
   const [collageResult, setCollageResult] = useState<CollageResult | null>(null);
   const editorialDesk = useRef<EditorialDeskHandle>(null);
+  const resumeChecked = useRef(false);
+  const resumeCase = useRef<string | null>(null);
+  const [resumeStep, setResumeStep] = useState<"story" | "review" | null>(null);
   const [showCollageEditor, setShowCollageEditor] = useState(false);
   const [editorMaximized, setEditorMaximized] = useState(false);
   const [editorPanelIds, setEditorPanelIds] = useState<string[]>([]);
@@ -909,23 +913,29 @@ export default function DashboardPage() {
     return () => { document.removeEventListener("keydown", keys); document.body.style.overflow = overflow; previous?.focus(); };
   }, [showCollageEditor]);
 
-  async function openCase(id: string) {
+  async function openCase(id: string, restoreStep?: "collage" | "story" | "review") {
     const requestId = ++caseRequest.current;
     try {
       const response = await fetch(`/api/backend/cases/${id}`, { cache: "no-store" });
-      if (response.status === 401) { router.replace("/"); return; }
+      if (response.status === 401) { router.replace(`/?next=${encodeURIComponent(storyDestination(id, restoreStep || "story"))}`); return false; }
       if (!response.ok) throw new Error("Could not load this outfit. Please try again.");
       const data = await response.json();
       if (requestId !== caseRequest.current) return;
       setSelected(data); setCandidateIndex(0);
-    } catch (error) { if (requestId === caseRequest.current) setToast((error as Error).message); }
+      if (restoreStep === "story" || restoreStep === "review") setResumeStep(restoreStep);
+      if (profile?.username && id !== selected?.id) {
+        rememberStory(profile.username, id, restoreStep || "collage");
+        window.history.replaceState(null, "", storyDestination(id, restoreStep || "collage"));
+      }
+      return true;
+    } catch (error) { if (requestId === caseRequest.current) setToast((error as Error).message); return false; }
   }
 
   async function load(silent = false, quiet = false) {
     if (silent) setRefreshing(true); else setLoading(true);
     try {
       const session = await fetch("/api/auth/session", { cache: "no-store" });
-      if (!session.ok) { router.replace("/"); return; }
+      if (!session.ok) { router.replace(`/?next=${encodeURIComponent(window.location.pathname + window.location.search)}`); return; }
       setProfile(await session.json());
       const [dashboardResponse, casesResponse] = await Promise.all([
         fetch("/api/backend/dashboard", { cache: "no-store" }),
@@ -1020,10 +1030,26 @@ export default function DashboardPage() {
   }).sort(newestPostFirst), [cases, filter, search, workspaceView]);
 
   useEffect(() => {
-    if (loading) return;
+    if (loading || !profile) return;
+    if (!resumeChecked.current) {
+      resumeChecked.current = true;
+      const query = new URLSearchParams(window.location.search);
+      const requested = query.get("case");
+      const stored = readResume(profile.username);
+      const resume = validCaseId(requested) ? { caseId: requested, step: query.get("step") === "review" ? "review" as const : query.get("step") === "story" ? "story" as const : "collage" as const } : stored;
+      if (resume) {
+        resumeCase.current = resume.caseId;
+        void openCase(resume.caseId, resume.step).then(ok => {
+          if (!ok) { resumeCase.current = null; if (visibleCases[0]) void openCase(visibleCases[0].id); }
+        });
+        return;
+      }
+    }
+    // A resumed story may be older than the current feed; keep it accessible.
+    if (resumeCase.current && (!selected || selected.id === resumeCase.current)) return;
     if (!visibleCases.length) { setSelected(null); return; }
     if (!selected || !visibleCases.some(item => item.id === selected.id)) void openCase(visibleCases[0].id);
-  }, [visibleCases, loading]);
+  }, [visibleCases, loading, profile?.username]);
 
   const candidate = selected?.candidates?.[candidateIndex];
   const historicalMatch = candidate ? isHistorical(candidate.proposed_match_type) : false;
@@ -1373,7 +1399,7 @@ export default function DashboardPage() {
         <article className="guardrail"><div className="guardrail-orbit"><Icon name="shield" size={18}/></div><span>Editorial promise</span><strong>Human taste. Machine speed.</strong><small>Nothing publishes without your final word.</small></article>
       </section>
 
-      <EditorialDesk ref={editorialDesk} selected={selected} onRefresh={() => { if (showCollageEditor || showIntake || decisionMode) return; if (selected) void openCase(selected.id); void load(); }}/>
+      <EditorialDesk ref={editorialDesk} selected={selected} username={profile?.username || ""} resumeStep={resumeStep} onResumeHandled={() => setResumeStep(null)} onEditCollage={openCollageEditor} onRefresh={() => { if (showCollageEditor || showIntake || decisionMode) return; if (selected) void openCase(selected.id); void load(); }}/>
       {selected?.demo_data && <p className="edition-message">Demonstration case and placeholder photographs. Connect a source in Sources &amp; schedule to prepare real editorial images.</p>}
       <InstagramWatchlist onOpen={async caseId => { setWorkspaceView("today"); setFilter("all"); setSearch(""); await load(); await openCase(caseId); }}/>
       <div className="workbench-heading"><div><span className="workbench-kicker">THE EDITORIAL DESK</span><h2>The working edit.</h2></div><p>Instagram &amp; Reddit: today &amp; yesterday · Websites: current week<span>Publication dates · Asia/Kolkata</span></p></div>
@@ -1520,7 +1546,7 @@ export default function DashboardPage() {
       <footer><div><Icon name="shield"/><span>This saves a new draft and audit entry. It does not publish to WordPress.</span></div><div><button type="button" className="ghost" onClick={closeCollageEditor} disabled={editorBusy}>Cancel</button><button type="button" className="download" onClick={() => void saveCollageEdit()} disabled={editorBusy || !editorPanelIds.length}><Icon name={editorBusy ? "refresh" : "image"}/>{editorBusy ? "Rendering…" : "Save & re-render"}</button></div></footer>
     </section></div>}
 
-    {collageResult && <div className="modal-backdrop collage-backdrop" onMouseDown={() => setCollageResult(null)}><section className="collage-result-modal" onMouseDown={event => event.stopPropagation()}><header><div><small>Render complete</small><h2>Your outfit collage is ready.</h2><p>{collageResult.assetCount} source-backed images{collageResult.layoutTemplate === "side_by_side" ? ", Side by side" : collageResult.canvasFormat ? ` · ${collageResult.canvasFormat === "instagram_portrait" ? "Instagram portrait" : "Instagram landscape"} · ${pretty(collageResult.layoutTemplate || "balanced_grid")}` : ""}, with saved crops, manifest and evidence bundle.</p></div><button type="button" className="modal-close" onClick={() => setCollageResult(null)} aria-label="Close"><Icon name="close"/></button></header><div className={`collage-result-frame ${collageResult.canvasFormat === "instagram_landscape" ? "is-landscape" : ""}`}><img src={collageResult.previewUrl} alt="Generated outfit collage preview"/></div><footer><span><Icon name="check"/>Saved layout applied · originals untouched</span><div><a className="ghost" href={collageResult.bundleUrl} target="_blank" rel="noreferrer"><Icon name="download"/>Evidence bundle</a><a className="download" href={collageResult.previewUrl} target="_blank" rel="noreferrer"><Icon name="external"/>Open full size</a><button type="button" className="primary" disabled={!selected?.latest_collage} onClick={() => { setCollageResult(null); editorialDesk.current?.sendDraft(); }}>Send WordPress draft</button></div></footer></section></div>}
+    {collageResult && <div className="modal-backdrop collage-backdrop" onMouseDown={() => setCollageResult(null)}><section className="collage-result-modal" onMouseDown={event => event.stopPropagation()}><header><div><small>Render complete</small><h2>Your outfit collage is ready.</h2><p>{collageResult.assetCount} source-backed images{collageResult.layoutTemplate === "side_by_side" ? ", Side by side" : collageResult.canvasFormat ? ` · ${collageResult.canvasFormat === "instagram_portrait" ? "Instagram portrait" : "Instagram landscape"} · ${pretty(collageResult.layoutTemplate || "balanced_grid")}` : ""}, with saved crops, manifest and evidence bundle.</p></div><button type="button" className="modal-close" onClick={() => setCollageResult(null)} aria-label="Close"><Icon name="close"/></button></header><div className={`collage-result-frame ${collageResult.canvasFormat === "instagram_landscape" ? "is-landscape" : ""}`}><img src={collageResult.previewUrl} alt="Generated outfit collage preview"/></div><footer><span><Icon name="check"/>Saved layout applied · originals untouched</span><div><a className="ghost" href={collageResult.bundleUrl} target="_blank" rel="noreferrer"><Icon name="download"/>Evidence bundle</a><a className="download" href={collageResult.previewUrl} target="_blank" rel="noreferrer"><Icon name="external"/>Open full size</a><button type="button" className="primary" disabled={!selected?.latest_collage} onClick={() => { setCollageResult(null); editorialDesk.current?.openStory(); }}>Write your story</button></div></footer></section></div>}
     {toast && <div className="toast" role="status" aria-live="polite"><Icon name="spark"/><span>{toast}</span></div>}
   </main>;
 }

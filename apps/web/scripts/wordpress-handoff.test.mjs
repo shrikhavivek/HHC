@@ -30,6 +30,7 @@ const logout = load("app/api/auth/logout/route.ts");
 const start = load("app/api/wordpress/start/route.ts");
 const connect = load("app/api/wordpress/connect/route.ts");
 const callback = load("app/api/wordpress/callback/route.ts");
+const complete = load("app/api/wordpress/complete/route.ts");
 const origin = "http://localhost:3100";
 const wp = "https://wordpress.example";
 const testPassword = "Editor-test-only-73!";
@@ -150,7 +151,7 @@ test("incomplete stories show the validation error without waiting for WordPress
   assert.match((await response.json()).detail, /Confirm the sources/);
   assert.equal(calls.some(call => call.url.startsWith(wp)), false);
 });
-test("WordPress login returns to the exact draft and revokes the temporary credential", async t => {
+test("WordPress login opens progress without credentials in the URL, then completes once", async t => {
   const calls = setup(t);
   const { auth, flowCookie } = await begin();
   assert.equal(calls.filter(c => c.url.endsWith("/complete")).length, 0);
@@ -160,10 +161,24 @@ test("WordPress login returns to the exact draft and revokes the temporary crede
   returned.searchParams.set("password", "test-only-application-password");
   const response = await callback.GET(new NextRequest(returned, { headers: { cookie: flowCookie } }));
   assert.equal(response.status, 303);
-  assert.equal(response.headers.get("location"), `${wp}/wp/wp-admin/post.php?post=123&action=edit`);
+  assert.equal(response.headers.get("location"), "http://127.0.0.1:3100/wordpress/complete");
   assert.equal(response.headers.get("referrer-policy"), "no-referrer");
   assert.equal(response.headers.get("cache-control"), "no-store");
   assert.equal(response.cookies.get(handoff.HANDOFF_COOKIE).value, "");
+  assert.equal(calls.filter(c => c.url.endsWith("/complete")).length, 0);
+  const pending = response.cookies.get(handoff.PENDING_COOKIE);
+  assert.equal(pending.httpOnly, true);
+  assert.equal(pending.value.includes("test-only-application-password"), false);
+  const cookie = `${handoff.PENDING_COOKIE}=${pending.value}`;
+  const blocked = await complete.POST(request("/api/wordpress/complete", { method: "POST", cookie, host: "http://127.0.0.1:3100", originHeader: "https://other.example" }));
+  assert.equal(blocked.status, 403);
+  assert.equal(calls.filter(c => c.url.endsWith("/complete")).length, 0);
+  const finished = await complete.POST(request("/api/wordpress/complete", { method: "POST", cookie, host: "http://127.0.0.1:3100", originHeader: "http://127.0.0.1:3100" }));
+  assert.equal(finished.status, 200);
+  const data = await finished.json();
+  assert.equal(data.edit_url, `${wp}/wp/wp-admin/post.php?post=123&action=edit`);
+  assert.equal(data.return_url, `${origin}/dashboard?case=case-1&step=review`);
+  assert.equal(finished.cookies.get(handoff.PENDING_COOKIE).value, "");
   assert.equal(calls.filter(c => c.url.endsWith("/complete")).length, 1);
   assert.ok(calls.some(c => c.options.method === "DELETE" && c.url.includes("/application-passwords/")));
 });
@@ -172,6 +187,7 @@ test("cancelled or forged WordPress callbacks never send a draft", async t => {
   const { auth, flowCookie } = await begin();
   const cancelled = await callback.GET(new NextRequest(auth.searchParams.get("reject_url"), { headers: { cookie: flowCookie } }));
   assert.match(cancelled.headers.get("location"), /status=cancelled/);
+  assert.equal(new URL(cancelled.headers.get("location")).searchParams.get("case"), "case-1");
   const forged = new URL(auth.searchParams.get("success_url"));
   forged.searchParams.set("state", "wrong-state");
   assert.match((await callback.GET(new NextRequest(forged, { headers: { cookie: flowCookie } }))).headers.get("location"), /status=expired/);

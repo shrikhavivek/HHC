@@ -55,7 +55,7 @@ test("flowing login recovers from connection errors with reduced motion", async 
 
 async function login(page: import("@playwright/test").Page, workspace: "editor" | "instagram" = "editor") {
   if (!username || !password) throw new Error("Set HHC_TEST_USERNAME and HHC_TEST_PASSWORD for live login tests.");
-  const ready = () => workspace === "instagram" ? expect(page.getByRole("region", { name: "Instagram discovery", exact: true })).toBeVisible() : expect(page.getByRole("button", { name: "Write story" })).toBeEnabled({ timeout: 15000 });
+  const ready = () => workspace === "instagram" ? expect(page.getByRole("region", { name: "Instagram discovery", exact: true })).toBeVisible() : expect(page.getByRole("button", { name: "View collage", exact: true })).toBeEnabled({ timeout: 15000 });
   if (sessionCookies) {
     await page.context().addCookies(sessionCookies);
     if ((await page.request.get("/api/auth/session")).ok()) {
@@ -72,6 +72,11 @@ async function login(page: import("@playwright/test").Page, workspace: "editor" 
   await expect(page).toHaveURL(/dashboard/);
   sessionCookies = await page.context().cookies();
   await ready();
+}
+
+async function openStory(page: import("@playwright/test").Page) {
+  await page.getByRole("button", { name: "View collage", exact: true }).click();
+  await page.locator(".collage-result-modal").getByRole("button", { name: "Write your story" }).click();
 }
 
 test("WordPress return route keeps callback URLs private", async ({ request }) => {
@@ -175,9 +180,9 @@ test("editorial polish stays dark even with a previously saved light preference"
   await expect(page.getByRole("button", { name: "Light", exact: true })).toHaveCount(0);
   await page.reload();
   await expect(page.locator(".studio-shell")).toHaveAttribute("data-theme", "dark");
-  await expect(page.getByRole("button", { name: "Write story" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "View collage", exact: true })).toBeEnabled();
   await page.screenshot({ path: "test-results/theme-dark-desktop.png", fullPage: true });
-  await page.getByRole("button", { name: "Write story" }).click();
+  await openStory(page);
   expect(await page.getByRole("dialog").evaluate(element => getComputedStyle(element).backgroundColor)).toBe("rgb(33, 30, 34)");
   await page.screenshot({ path: "test-results/theme-dark-dialog.png" });
   await page.getByRole("button", { name: "Close editorial workspace" }).click();
@@ -354,7 +359,7 @@ test("editorial polish uses readable text throughout the studio", async ({ page 
   expect(await fontSize(".hero-deck")).toBeGreaterThanOrEqual(32);
   expect(await fontSize(".look-facts dd")).toBeGreaterThanOrEqual(16);
   expect(await fontSize(".asset-tile-copy footer > span")).toBeGreaterThanOrEqual(14);
-  await page.getByRole("button", { name: "Write story", exact: true }).click();
+  await openStory(page);
   expect(await fontSize(".edition-form label")).toBeGreaterThanOrEqual(15);
   expect(await fontSize(".edition-form textarea")).toBeGreaterThanOrEqual(16);
   await page.getByRole("button", { name: "Close editorial workspace" }).click();
@@ -466,12 +471,11 @@ test("editor can save a story and inspect source status", async ({ page }) => {
   await page.getByRole("button", { name: "Sources & schedule" }).click();
   await expect(page.getByRole("dialog")).toContainText("A fresh edition. Every day.");
   await page.getByRole("button", { name: "Close editorial workspace" }).click();
-  await page.getByRole("button", { name: "Write story" }).click();
+  await openStory(page);
   await page.getByLabel("Headline", { exact: true }).fill("An editor's considered take");
   await page.getByLabel("The story", { exact: true }).fill("A saved editorial draft, ready for further research.");
-  await page.getByRole("button", { name: "Save story", exact: true }).click();
-  await expect(page.getByRole("status")).toContainText("Story saved.");
-  await expect(page.getByRole("button", { name: /Send WordPress draft/ })).toBeDisabled();
+  await expect(page.getByRole("status", { name: "Save status" })).toHaveText("Saved");
+  await expect(page.getByRole("button", { name: "Review draft", exact: true })).toBeEnabled();
   await page.screenshot({ path: "test-results/editorial-story.png", fullPage: true });
   await page.getByRole("button", { name: "Close editorial workspace" }).click();
   expect(errors).toEqual([]);
@@ -505,7 +509,7 @@ test("collage controls support undo and save a new version", async ({ page }) =>
 test("mobile story workspace fits the viewport", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await login(page);
-  await page.getByRole("button", { name: "Write story" }).click();
+  await openStory(page);
   await expect(page.getByLabel("Headline", { exact: true })).toBeVisible();
   const dialog = page.getByRole("dialog");
   const bounds = await dialog.boundingBox();
@@ -635,106 +639,5 @@ for (const width of [1440, 390]) {
     await page.getByRole("button", { name: "Resize or crop Current photo", exact: true }).click();
     await expect.poll(() => preview.evaluate((canvas: HTMLCanvasElement) => [canvas.width, canvas.height])).toEqual([200, 300]);
     expect(errors).toEqual([]);
-  });
-}
-
-for (const scenario of [
-  { width: 1440, connected: true, action: "toolbar" },
-  { width: 390, connected: false, action: "preview" },
-  { width: 1440, connected: false, action: "edited story" },
-  { width: 390, connected: false, action: "blocked story" },
-  { width: 1440, connected: false, action: "save failure" },
-]) {
-  test(`WordPress draft action redirects or explains the blocker: ${scenario.action}`, async ({ page }) => {
-    await page.setViewportSize({ width: scenario.width, height: 900 });
-    const now = new Date().toISOString();
-    const item = {
-      id: "wp-ui-case", title: "A reviewed look", celebrity: "Alia Bhatt", designer: "Designer",
-      event_name: "Appearance", status: "needs_review", match_type: "same_outfit", confidence: 0.9,
-      risk_level: "low", base_image: "/fixture.svg", demo_data: false, source_type: "instagram",
-      fashion_category: "women", created_at: now, published_at: now, candidates: [], assets: [], extraction: {},
-      permalink: "https://www.instagram.com/p/fixture/",
-      latest_collage: { id: "collage-1", preview_url: "/fixture.svg", bundle_url: "/api/cases/wp-ui-case/bundle" },
-      collage_editor: { revision: 1, panels: [], default_ids: [], canvas_format: "instagram_portrait", layout_template: "balanced_grid" },
-    };
-    let story = { title: "A reviewed look", body: "The completed story.", alt_text: "A fashion collage", credits: "Photo credit", category_ids: [], tag_ids: [], revision: 1, reviewed_collage_id: "collage-1", sync_state: "local" };
-    let sends = 0;
-    let saves = 0;
-    let rejectSend = scenario.action === "blocked story";
-    await page.route("**/media/**", route => route.fulfill({ contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="500"><rect width="400" height="500" fill="#805465"/></svg>' }));
-    await page.route("**/api/**", async route => {
-      const path = new URL(route.request().url()).pathname;
-      let data: unknown = {};
-      if (path === "/api/auth/session") data = { username: "editor", demo: !scenario.connected };
-      else if (path.endsWith("/dashboard")) data = { total: 1, status_counts: {}, source_mode: "rss" };
-      else if (path === "/api/backend/cases") data = [item];
-      else if (path === "/api/backend/cases/wp-ui-case") data = item;
-      else if (path.endsWith("/operations")) data = { runs: [] };
-      else if (path.endsWith("/instagram-browser/config")) data = { enabled: false, celebrities: [], brands: [] };
-      else if (path.endsWith("/instagram-browser/posts")) data = { results: [] };
-      else if (path.endsWith("/instagram-browser/status")) data = { status: "not_run" };
-      else if (path.endsWith("/wordpress/connection")) data = { connected: scenario.connected, enabled: true };
-      else if (path.endsWith("/wordpress/taxonomy")) data = { categories: [], tags: [] };
-      else if (path.endsWith("/story")) {
-        if (route.request().method() === "POST") {
-          saves++;
-          if (scenario.action === "save failure") {
-            await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ detail: "Story changed in another window. Reload before saving." }) });
-            return;
-          }
-          story = { ...story, ...route.request().postDataJSON(), revision: story.revision + 1 };
-        }
-        data = story;
-      }
-      else if (path === "/api/wordpress/start" && route.request().method() === "POST") {
-        sends++;
-        if (rejectSend) {
-          await route.fulfill({ status: 422, contentType: "application/json", body: JSON.stringify({ detail: "Confirm the sources and usage rights for the latest collage" }) });
-          return;
-        }
-        story = { ...story, sync_state: "draft_created" };
-        expect(route.request().postDataJSON()).toEqual({ case_id: item.id, reconcile: false });
-        data = { redirect_url: "/wordpress/result?status=cancelled" };
-      }
-      await route.fulfill({ contentType: "application/json", body: JSON.stringify(data) });
-    });
-    await page.goto("/dashboard");
-    const action = page.getByRole("region", { name: "Editorial tools" }).getByRole("button", { name: "Send WordPress draft", exact: true });
-    await expect(action).toBeEnabled();
-    const dialog = page.locator(".edition-dialog");
-    const send = dialog.getByRole("button", { name: /Send WordPress draft/ });
-    if (scenario.action === "preview") {
-      await page.getByRole("button", { name: "View collage", exact: true }).click();
-      await page.locator(".collage-result-modal").getByRole("button", { name: "Send WordPress draft", exact: true }).click();
-    } else if (["edited story", "save failure"].includes(scenario.action)) {
-      await page.getByRole("button", { name: "Write story" }).click();
-      await expect(send).toBeEnabled();
-      await dialog.getByLabel("Headline", { exact: true }).fill("Updated headline");
-      await expect(send).toBeEnabled();
-      await send.click();
-      if (scenario.action === "save failure") {
-        await expect(dialog.getByRole("status")).toHaveText(/Story changed in another window/);
-        await expect(dialog.getByRole("status")).toBeInViewport();
-        expect(sends).toBe(0);
-        await expect(dialog.getByLabel("Headline", { exact: true })).toHaveValue("Updated headline");
-        return;
-      }
-    } else {
-      await action.click();
-    }
-    if (rejectSend) {
-      await expect(dialog.getByRole("status")).toHaveText("Confirm the sources and usage rights for the latest collage");
-      await expect(dialog.getByRole("status")).toBeInViewport();
-      await expect(send).toBeEnabled();
-      rejectSend = false;
-      await send.click();
-    }
-    await expect(page).toHaveURL(/\/wordpress\/result\?status=cancelled/);
-    await expect(page.getByText(/WordPress sign-in was cancelled/)).toBeVisible();
-    expect(sends).toBe(scenario.action === "blocked story" ? 2 : 1);
-    if (scenario.action === "edited story") {
-      expect(saves).toBe(1);
-      expect(story.title).toBe("Updated headline");
-    }
   });
 }

@@ -52,10 +52,20 @@ database connectivity.
 3. Inspect historical leads against the original photos. Record the source,
    garment details, distinct appearances and chronology before approving a match.
 4. Open **Edit collage & sources** to select the actual photos to use.
-5. Open **Write story**, write the headline and editorial text, add image
-   descriptions and photo credits, and choose WordPress categories and tags.
-6. Confirm the reviewed collage's attribution and usage rights, save the story,
-   then **Send WordPress draft**. Finish publication or scheduling in WordPress.
+5. Choose **Write your story** after saving the collage. Add the headline,
+   editorial text, image description and credits; edits save automatically.
+6. Choose **Review draft** to inspect the full collage, story and credits.
+   Confirm the photo rights and attribution, then **Continue to WordPress**.
+   Sign in, wait for the draft confirmation, and choose **Open draft in WordPress**.
+   Finish publication or scheduling in WordPress.
+
+Story autosave is debounced and preserves typing during an active save. A
+per-editor recovery copy in session storage keeps unfinished edits in the same
+browser tab after reload or sign-in. Revision conflicts require choosing the
+saved version or explicitly keeping local edits. Recovery copies are cleared
+when saved, contain no login credentials, and are not a substitute for backups.
+Closing the browser tab can discard edits that never reached the server.
+WordPress cancellation returns to the same story and review step.
 
 ### Legacy public-web discovery API
 
@@ -304,10 +314,10 @@ can retry. The app needs to remain running for daily refresh to occur.
 
 Set `WORDPRESS_SITE_URL` to the site's HTTPS home URL and
 `WORDPRESS_PUBLISHER_ENABLED=true` to allow explicit draft handoffs.
-After saving and reviewing the story, **Send WordPress draft** redirects to the
+After reviewing the story, **Continue to WordPress** redirects to the
 site's own WordPress sign-in/authorization page. Use the normal WordPress login
-there and approve the studio connection. The app creates the draft and opens
-its WordPress editor; publishing remains a manual action. The account needs
+there and approve the studio connection. A progress page creates the draft and
+offers **Open draft in WordPress**; publishing remains a manual action. The account needs
 `edit_posts` and `upload_files` permissions.
 
 The app discovers the site's WordPress install path, including HHC's `/wp` path.
@@ -319,7 +329,11 @@ work. The generated application password is used only for that handoff and
 revoked on a best-effort basis afterward; if the site is unreachable during
 revocation, it can be removed in the WordPress user's profile. Do not enable
 access logging of callback query strings: WordPress returns the temporary
-credential in its authorization response. Responses use no-store/no-referrer.
+credential in its authorization response. The callback immediately removes it
+from the displayed URL, transferring it into an encrypted HttpOnly cookie for
+the same-origin completion POST. That cookie is cleared after completion.
+Responses use no-store/no-referrer. The completion page does not blindly retry
+failed transfers; it links back to the saved story for reconciliation.
 
 Studio sessions expire after eight hours and logout revokes the server record.
 Editor login checks the configured salted password hash on the server and does
