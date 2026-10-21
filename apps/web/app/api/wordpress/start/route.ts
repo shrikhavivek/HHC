@@ -30,7 +30,7 @@ export async function POST(request: NextRequest) {
     // WordPress accepts HTTP loopback IP callbacks, but not HTTP localhost.
     if (callback.protocol === "http:" && callback.hostname === "localhost") callback.hostname = "127.0.0.1";
     if (callback.protocol !== "https:" && !["127.0.0.1", "[::1]"].includes(callback.hostname)) throw new Error();
-    const ticket = encodeHandoff({ id: pending.id, username: session.username, site, demo: false, exp: pending.expires_at, purpose: "wordpress-handoff", caseId: body.case_id, returnOrigin, callbackOrigin: callback.origin, wpSite: wpSite.href.replace(/\/$/, ""), authorizeUrl: authorizeUrl.href });
+    const ticket = encodeHandoff({ id: pending.id, username: session.username, authVersion: session.authVersion, site, demo: false, exp: pending.expires_at, purpose: "wordpress-handoff", caseId: body.case_id, returnOrigin, callbackOrigin: callback.origin, wpSite: wpSite.href.replace(/\/$/, ""), authorizeUrl: authorizeUrl.href });
     // Set a browser-bound cookie on the callback host before visiting WordPress.
     const destination = new URL("/api/wordpress/connect", callback);
     destination.searchParams.set("ticket", ticket);

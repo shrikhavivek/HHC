@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createSession, EditorSession, verifySession } from "@/lib/session";
+import { editorAccount } from "@/lib/editor-auth";
 
 export const HANDOFF_COOKIE = "hhc_wordpress_handoff";
 export type Handoff = EditorSession & { purpose: "wordpress-handoff"; caseId: string; returnOrigin: string; callbackOrigin: string; wpSite: string; authorizeUrl: string };
@@ -11,6 +12,8 @@ export function wordpressSite() {
 export function encodeHandoff(value: Handoff) { return createSession(value); }
 export function decodeHandoff(value?: string): Handoff | null {
   const data = verifySession(value) as Handoff | null;
+  const account = editorAccount();
+  if (!account || data?.authVersion !== account.version || data?.username !== account.username) return null;
   if (!data || data.purpose !== "wordpress-handoff" || !/^[a-f0-9]{64}$/.test(data.id) || !/^[a-zA-Z0-9_-]{1,128}$/.test(data.caseId)) return null;
   try {
     if (data.site !== wordpressSite() || new URL(data.wpSite).origin !== new URL(data.site).origin || new URL(data.authorizeUrl).origin !== new URL(data.site).origin) return null;

@@ -1,8 +1,9 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "crypto";
 import type { NextRequest } from "next/server";
+import { editorAccount } from "@/lib/editor-auth";
 export const SESSION_COOKIE = "hhc_editor_session";
 export const sessionMaxAge = 60 * 60 * 8;
-export type EditorSession = { id: string; username: string; site: string; exp: number; demo: boolean; studio?: boolean; authorization?: string };
+export type EditorSession = { id: string; username: string; site: string; exp: number; demo: boolean; studio?: boolean; authorization?: string; authVersion?: string };
 function key() {
   const value = process.env.SESSION_SECRET || "";
   if (value.length < 32 || (process.env.APP_ENV === "production" && /^(local-|replace-)/.test(value))) throw new Error("Configure a random SESSION_SECRET");
@@ -35,7 +36,8 @@ export async function internalRequest(path: string, init: RequestInit = {}) {
 }
 export async function authenticatedSession(request: NextRequest) {
   const session = verifySession(request.cookies.get(SESSION_COOKIE)?.value);
-  if (!session) return null;
+  const account = editorAccount();
+  if (!session || !account || session.authVersion !== account.version || session.username !== account.username || !session.studio || session.demo) return null;
   try {
     const response = await internalRequest(`sessions/${encodeURIComponent(session.id)}`);
     if (!response.ok) return null;

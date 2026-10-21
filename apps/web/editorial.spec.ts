@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 test.use({ viewport: { width: 1440, height: 1000 } });
-const username = process.env.HHC_TEST_USERNAME || "hhc-demo";
-const password = process.env.HHC_TEST_PASSWORD || "HHC-Demo-2026!";
+const username = process.env.HHC_TEST_USERNAME || "";
+const password = process.env.HHC_TEST_PASSWORD || "";
 let sessionCookies: Awaited<ReturnType<import("@playwright/test").BrowserContext["cookies"]>> | undefined;
 
 test("timeless login layout fits desktop and mobile", async ({ page }) => {
@@ -11,7 +11,8 @@ test("timeless login layout fits desktop and mobile", async ({ page }) => {
     await expect(page.getByRole("heading", { name: "Welcome to the studio." })).toBeVisible();
     await page.evaluate(() => document.fonts.ready);
     await page.getByRole("button", { name: "Unleash your editorial eye" }).scrollIntoViewIfNeeded();
-    await expect(page.locator("input")).toHaveCount(0);
+    await expect(page.getByLabel("Username", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("Password", { exact: true })).toHaveAttribute("type", "password");
     const backgroundBounds = await page.locator(".auth-editorial-image").boundingBox();
     const pageBounds = await page.locator(".auth-shell").boundingBox();
     expect(backgroundBounds).toEqual(pageBounds);
@@ -43,8 +44,9 @@ test("flowing login recovers from connection errors with reduced motion", async 
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/");
   expect(await page.locator(".auth-form").evaluate(element => getComputedStyle(element).animationName)).toBe("none");
-  await expect(page.locator("input")).toHaveCount(0);
-  await page.route("**/api/auth/enter", route => route.abort());
+  await page.getByLabel("Username", { exact: true }).fill("test-editor");
+  await page.getByLabel("Password", { exact: true }).fill("test-password");
+  await page.route("**/api/auth/login", route => route.abort());
   await page.getByRole("button", { name: "Unleash your editorial eye" }).click();
   await expect(page.locator(".auth-error")).toContainText("Please try again");
   await expect(page.locator(".auth-error")).toBeFocused();
@@ -52,6 +54,7 @@ test("flowing login recovers from connection errors with reduced motion", async 
 });
 
 async function login(page: import("@playwright/test").Page, workspace: "editor" | "instagram" = "editor") {
+  if (!username || !password) throw new Error("Set HHC_TEST_USERNAME and HHC_TEST_PASSWORD for live login tests.");
   const ready = () => workspace === "instagram" ? expect(page.getByRole("region", { name: "Instagram discovery", exact: true })).toBeVisible() : expect(page.getByRole("button", { name: "Write story" })).toBeEnabled({ timeout: 15000 });
   if (sessionCookies) {
     await page.context().addCookies(sessionCookies);
@@ -63,6 +66,8 @@ async function login(page: import("@playwright/test").Page, workspace: "editor" 
     await page.context().clearCookies();
   }
   await page.goto("/");
+  await page.getByLabel("Username", { exact: true }).fill(username);
+  await page.getByLabel("Password", { exact: true }).fill(password);
   await page.getByRole("button", { name: "Unleash your editorial eye" }).click();
   await expect(page).toHaveURL(/dashboard/);
   sessionCookies = await page.context().cookies();
@@ -75,6 +80,19 @@ test("WordPress return route keeps callback URLs private", async ({ request }) =
   expect(response.headers()["referrer-policy"]).toBe("no-referrer");
   expect(response.headers()["cache-control"]).toBe("no-store");
   expect(response.headers().location).toMatch(/\/wordpress\/result\?status=expired$/);
+});
+
+test("editor access blocks guests and incorrect credentials", async ({ page, request }) => {
+  expect((await request.get("/api/backend/cases")).status()).toBe(401);
+  expect((await request.get("/api/auth/session")).status()).toBe(401);
+  expect((await request.post("/api/auth/enter")).status()).toBe(403);
+  await page.goto("/dashboard");
+  await expect(page).toHaveURL(/\/$/);
+  await page.getByLabel("Username", { exact: true }).fill("wrong-editor");
+  await page.getByLabel("Password", { exact: true }).fill("wrong-test-password");
+  await page.getByRole("button", { name: "Unleash your editorial eye" }).click();
+  await expect(page.locator(".auth-error")).toHaveText("Incorrect username or password.");
+  expect((await page.request.get("/api/backend/cases")).status()).toBe(401);
 });
 
 test("editorial polish supports mobile navigation and empty search", async ({ page }) => {
@@ -117,13 +135,18 @@ test("editorial polish loads its typography and artwork locally", async ({ page 
   await expect(page.getByRole("link", { name: "Skip to content" })).toBeFocused();
   expect((await page.request.get("/icon.svg")).status()).toBe(200);
 });
-test("studio entrance presents service errors without credential fields", async ({ page }) => {
+test("studio entrance presents login errors and supports password visibility", async ({ page }) => {
   await page.goto("/");
-  await page.route("**/api/auth/enter", route => route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "The studio could not be reached. Please try again." }) }));
+  await page.route("**/api/auth/login", route => route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "The studio could not be reached. Please try again." }) }));
+  await page.getByLabel("Username", { exact: true }).fill("test-editor");
+  await page.getByLabel("Password", { exact: true }).fill("test-password");
+  await page.getByRole("button", { name: "Show password" }).click();
+  await expect(page.getByLabel("Password", { exact: true })).toHaveAttribute("type", "text");
+  await page.getByRole("button", { name: "Hide password" }).click();
   await page.getByRole("button", { name: "Unleash your editorial eye" }).click();
   await expect(page.locator(".auth-error")).toHaveText("The studio could not be reached. Please try again.");
   await expect(page.locator(".auth-error")).toBeFocused();
-  await expect(page.locator("input")).toHaveCount(0);
+  await expect(page.getByLabel("Password", { exact: true })).toHaveAttribute("type", "password");
   await expect(page.getByRole("button", { name: "Unleash your editorial eye" })).toBeEnabled();
 });
 

@@ -7,14 +7,16 @@ Reddit, Instagram or WordPress credentials in JavaScript.
 ## Run locally
 
 Keep your existing `.env`; copy `.env.example` only for a new installation.
-For a local demonstration, explicitly set:
+Configure `EDITOR_USERNAME` and `EDITOR_PASSWORD_HASH` in your private `.env`.
+The hash format is `scrypt:131072:8:1:<32-byte salt as hex>:<64-byte hash as hex>`.
+The helper `node apps/web/scripts/configure-editor.mjs` accepts JSON containing
+`username` and `password` on standard input and stores only the salted hash in
+the root `.env`. Keep credentials out of source control and shell history.
+For local use, set:
 
 ```env
 APP_ENV=development
 APP_ORIGIN=http://localhost:3100
-DEMO_LOGIN_ENABLED=true
-DEMO_USERNAME=hhc-demo
-DEMO_PASSWORD=HHC-Demo-2026!
 REDDIT_SOURCE_MODE=manual
 ```
 
@@ -24,10 +26,13 @@ Then run:
 docker compose up -d --build
 ```
 
-Open http://localhost:3100 and click **Unleash your editorial eye** to enter
-the local editor without credentials. WordPress sign-in happens only when sending
-a reviewed draft. The password-free entrance is disabled in production.
-Demo sign-in is disabled by default and always disabled in production.
+Open http://localhost:3100, enter your editor username and password, and click
+**Unleash your editorial eye**. WordPress sign-in happens only when sending
+a reviewed draft. Guest entry and the old demo/WordPress login paths are disabled.
+The editor account works locally and in hosted installations. For hosting, set
+`APP_ENV=production`, an HTTPS `APP_ORIGIN`, and strong deployment secrets.
+Failed attempts are rate limited in PostgreSQL. Existing guest sessions are
+rejected; changing the configured account invalidates existing editor sessions.
 Demonstration cases use clearly identified placeholder images; they cannot
 be sent to WordPress. No live provider access is implied by demo data.
 
@@ -317,8 +322,8 @@ access logging of callback query strings: WordPress returns the temporary
 credential in its authorization response. Responses use no-store/no-referrer.
 
 Studio sessions expire after eight hours and logout revokes the server record.
-Existing credential-based sign-in remains available at the authentication API
-for installations that use it, but the local entrance has no credential form.
+Editor login checks the configured salted password hash on the server and does
+not contact WordPress or store the editor password in its session cookie.
 
 Only drafts are created. The handoff uploads the reviewed image, credits,
 image description, categories and tags. Historical panels require the latest

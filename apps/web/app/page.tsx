@@ -8,6 +8,7 @@ export default function LoginPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const errorRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -22,12 +23,15 @@ export default function LoginPage() {
 
   async function login(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (loading) return;
+    const fields = new FormData(event.currentTarget);
     setLoading(true);
     setError("");
     try {
-      const response = await fetch("/api/auth/enter", {
+      const response = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: fields.get("username"), password: fields.get("password") }),
         signal: AbortSignal.timeout(20000),
       });
       const data = await response.json();
@@ -68,11 +72,22 @@ export default function LoginPage() {
 
           {error && <div className="auth-error" role="alert" tabIndex={-1} ref={errorRef}>{error}</div>}
 
+          <div className="auth-fields">
+            <div className="auth-field">
+              <label htmlFor="editor-username">Username</label>
+              <div className="auth-input-shell"><input id="editor-username" name="username" autoComplete="username" autoCapitalize="none" spellCheck={false} maxLength={120} required disabled={loading} /></div>
+            </div>
+            <div className="auth-field">
+              <label htmlFor="editor-password">Password</label>
+              <div className="auth-input-shell"><input id="editor-password" name="password" type={showPassword ? "text" : "password"} autoComplete="current-password" maxLength={256} required disabled={loading} /><button type="button" onClick={() => setShowPassword(value => !value)} aria-label={showPassword ? "Hide password" : "Show password"}>{showPassword ? "Hide" : "Show"}</button></div>
+            </div>
+          </div>
+
           <button className="auth-submit" disabled={loading}>
             {loading ? "Opening your studio…" : "Unleash your editorial eye"}
             <span aria-hidden="true">&rarr;</span>
           </button>
-          <p className="auth-form-footnote"><strong>Your perspective makes the difference.</strong>Start creating. Connect to WordPress when your draft is ready.</p>
+          <p className="auth-form-footnote"><strong>Your perspective makes the difference.</strong>Sign in to your editorial workspace. Connect to WordPress when your draft is ready.</p>
         </form>
       </section>
       </div>

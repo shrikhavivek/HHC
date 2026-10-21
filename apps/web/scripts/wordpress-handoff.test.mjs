@@ -6,6 +6,7 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { NextRequest } from "next/server.js";
+import { scryptSync } from "node:crypto";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const cache = new Map();
@@ -23,15 +24,23 @@ function load(relative) {
 const session = load("lib/session.ts");
 const handoff = load("lib/wordpress-handoff.ts");
 const enter = load("app/api/auth/enter/route.ts");
+const login = load("app/api/auth/login/route.ts");
+const account = load("lib/editor-auth.ts");
+const logout = load("app/api/auth/logout/route.ts");
 const start = load("app/api/wordpress/start/route.ts");
 const connect = load("app/api/wordpress/connect/route.ts");
 const callback = load("app/api/wordpress/callback/route.ts");
 const origin = "http://localhost:3100";
 const wp = "https://wordpress.example";
+const testPassword = "Editor-test-only-73!";
+const salt = Buffer.alloc(32, 7);
+const testHash = `scrypt:131072:8:1:${salt.toString("hex")}:${scryptSync(testPassword, salt, 64, { N: 131072, r: 8, p: 1, maxmem: 256 * 1024 * 1024 }).toString("hex")}`;
+const signIn = () => login.POST(request("/api/auth/login", { method: "POST", body: { username: "editor", password: testPassword } }));
 
 function setup(t) {
   const old = { ...process.env };
   Object.assign(process.env, { APP_ENV: "development", APP_ORIGIN: origin, SESSION_SECRET: "test-only-secret-with-more-than-32-characters", API_INTERNAL_URL: "http://backend.example", WORDPRESS_SITE_URL: wp, EDITOR_API_KEY: "test-editor-key" });
+  Object.assign(process.env, { EDITOR_USERNAME: "editor", EDITOR_PASSWORD_HASH: testHash });
   const originalFetch = global.fetch;
   t.after(() => { global.fetch = originalFetch; for (const key of Object.keys(process.env)) if (!(key in old)) delete process.env[key]; Object.assign(process.env, old); });
   const calls = [];
@@ -41,7 +50,7 @@ function setup(t) {
     if (String(url).endsWith("/wordpress-handoffs")) return Response.json({ id: "d".repeat(64), expires_at: Math.floor(Date.now() / 1000) + 900 });
     if (String(url).endsWith("/complete")) return Response.json({ post_id: 123, status: "draft" });
     if (String(url).endsWith("/introspect")) return Response.json({ uuid: "12345678-1234-1234-1234-123456789abc" });
-    return Response.json({ ok: true, actor: "Local editor" });
+    return Response.json({ ok: true, actor: "editor" });
   };
   return calls;
 }
@@ -49,7 +58,7 @@ function request(path, { method = "GET", body, cookie, host = origin, originHead
   return new NextRequest(`${host}${path}`, { method, headers: { ...(method === "POST" ? { origin: originHeader, "content-type": "application/json" } : {}), ...(cookie ? { cookie } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) });
 }
 async function begin() {
-  const response = await enter.POST(request("/api/auth/enter", { method: "POST" }));
+  const response = await signIn();
   assert.equal(response.status, 200);
   const cookie = `${session.SESSION_COOKIE}=${response.cookies.get(session.SESSION_COOKIE).value}`;
   const pending = await start.POST(request("/api/wordpress/start", { method: "POST", cookie, body: { case_id: "case-1" } }));
@@ -62,15 +71,70 @@ async function begin() {
   const flowCookie = `${handoff.HANDOFF_COOKIE}=${connected.cookies.get(handoff.HANDOFF_COOKIE).value}`;
   return { auth, flowCookie };
 }
-test("local entrance needs no credentials, rejects cross-site and production entry", async t => {
-  setup(t);
-  assert.equal((await enter.POST(request("/api/auth/enter", { method: "POST", originHeader: "https://other.example" }))).status, 403);
-  const response = await enter.POST(request("/api/auth/enter", { method: "POST" }));
+test("editor login works in production without contacting WordPress; guest entry stays closed", async t => {
+  const calls = setup(t);
+  process.env.APP_ENV = "production";
+  const response = await signIn();
+  assert.equal(response.status, 200);
   const value = session.verifySession(response.cookies.get(session.SESSION_COOKIE).value);
   assert.equal(value.studio, true);
+  assert.equal(value.username, "editor");
   assert.equal(value.authorization, undefined);
-  process.env.APP_ENV = "production";
+  assert.equal(value.password, undefined);
+  assert.equal(value.authVersion, account.editorAccount().version);
+  assert.equal(response.cookies.get(session.SESSION_COOKIE).secure, true);
+  assert.equal(calls.some(call => call.url.startsWith(wp)), false);
   assert.equal((await enter.POST(request("/api/auth/enter", { method: "POST" }))).status, 403);
+  process.env.APP_ENV = "development";
+  assert.equal((await enter.POST()).status, 403);
+});
+
+test("wrong credentials, cross-site login and legacy credentials never create sessions", async t => {
+  const calls = setup(t);
+  for (const body of [{ username: "editor", password: "wrong-password" }, { username: "wrong-user", password: testPassword }]) {
+    const response = await login.POST(request("/api/auth/login", { method: "POST", body }));
+    assert.equal(response.status, 401);
+    assert.equal(response.cookies.get(session.SESSION_COOKIE), undefined);
+    assert.equal((await response.json()).detail, "Incorrect username or password.");
+  }
+  assert.equal((await login.POST(request("/api/auth/login", { method: "POST", originHeader: "https://other.example", body: { username: "editor", password: testPassword } }))).status, 403);
+  assert.equal((await login.POST(request("/api/auth/login", { method: "POST", body: { username: "editor", applicationPassword: testPassword } }))).status, 400);
+  assert.equal(calls.some(call => call.url.endsWith("/sessions")), false);
+});
+
+test("rate limits, missing config and backend failures fail closed", async t => {
+  setup(t);
+  const baseFetch = global.fetch;
+  global.fetch = async (url, options) => String(url).endsWith("/login-attempt") ? Response.json({}, { status: 429 }) : baseFetch(url, options);
+  const limited = await signIn();
+  assert.equal(limited.status, 429);
+  assert.equal(limited.headers.get("retry-after"), "900");
+  global.fetch = async () => Response.json({}, { status: 503 });
+  assert.equal((await signIn()).status, 503);
+  global.fetch = baseFetch;
+  process.env.EDITOR_PASSWORD_HASH = "";
+  assert.equal((await signIn()).status, 503);
+});
+
+test("old guest sessions, rotated credentials and logged-out sessions are rejected", async t => {
+  setup(t);
+  const guest = session.createSession({ id: "a".repeat(64), username: "Local editor", site: wp, demo: false, studio: true, exp: Date.now() / 1000 + 1000 });
+  assert.equal(await session.authenticatedSession(request("/api/auth/session", { cookie: `${session.SESSION_COOKIE}=${guest}` })), null);
+  const entered = await signIn();
+  const cookie = `${session.SESSION_COOKIE}=${entered.cookies.get(session.SESSION_COOKIE).value}`;
+  assert.equal((await session.authenticatedSession(request("/api/auth/session", { cookie }))).username, "editor");
+  const value = session.verifySession(entered.cookies.get(session.SESSION_COOKIE).value);
+  const expired = session.createSession({ ...value, exp: 1 });
+  assert.equal(await session.authenticatedSession(request("/api/auth/session", { cookie: `${session.SESSION_COOKIE}=${expired}` })), null);
+  const tampered = entered.cookies.get(session.SESSION_COOKIE).value + "tampered";
+  assert.equal(await session.authenticatedSession(request("/api/auth/session", { cookie: `${session.SESSION_COOKIE}=${tampered}` })), null);
+  process.env.EDITOR_USERNAME = "changed-editor";
+  assert.equal(await session.authenticatedSession(request("/api/auth/session", { cookie })), null);
+  process.env.EDITOR_USERNAME = "editor";
+  const response = await logout.POST(request("/api/auth/logout", { method: "POST", cookie }));
+  assert.equal(response.cookies.get(session.SESSION_COOKIE).value, "");
+  global.fetch = async () => Response.json({}, { status: 401 });
+  assert.equal(await session.authenticatedSession(request("/api/auth/session", { cookie })), null);
 });
 
 test("incomplete stories show the validation error without waiting for WordPress", async t => {
@@ -79,7 +143,7 @@ test("incomplete stories show the validation error without waiting for WordPress
   global.fetch = async (url, options) => String(url).endsWith("/wordpress-handoffs")
     ? Response.json({ detail: "Confirm the sources and usage rights for the latest collage" }, { status: 422 })
     : baseFetch(url, options);
-  const entered = await enter.POST(request("/api/auth/enter", { method: "POST" }));
+  const entered = await signIn();
   const cookie = `${session.SESSION_COOKIE}=${entered.cookies.get(session.SESSION_COOKIE).value}`;
   const response = await start.POST(request("/api/wordpress/start", { method: "POST", cookie, body: { case_id: "case-1" } }));
   assert.equal(response.status, 422);
