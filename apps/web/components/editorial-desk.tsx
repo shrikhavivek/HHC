@@ -17,7 +17,7 @@ export async function editorialRequest<T>(path: string, body?: unknown): Promise
 function photo(path: string) { return "/media" + path; }
 function readable(value: string) { return value.replaceAll("_", " "); }
 
-export type EditorialDeskHandle = { openStory: () => void };
+export type EditorialDeskHandle = { sendDraft: () => void };
 
 export function EditorialDesk({ selected, onRefresh, ref }: { selected: Selected | null; onRefresh: () => void; ref?: Ref<EditorialDeskHandle> }) {
   const [tab, setTab] = useState<"story" | "history" | "connections" | null>(null);
@@ -31,6 +31,7 @@ export function EditorialDesk({ selected, onRefresh, ref }: { selected: Selected
   const [dirty, setDirty] = useState(false);
   const [editUrl, setEditUrl] = useState("");
   const dialog = useRef<HTMLDialogElement>(null);
+  const feedback = useRef<HTMLParagraphElement>(null);
   const saved = useRef("");
   const requestVersion = useRef(0);
   const refreshAction = useRef(onRefresh);
@@ -41,7 +42,8 @@ export function EditorialDesk({ selected, onRefresh, ref }: { selected: Selected
     if (dirty && !window.confirm("Discard the unsaved story changes?")) return;
     dialog.current?.close(); setTab(null); setDirty(false);
   }
-  async function open(next: typeof tab) {
+  async function open(next: typeof tab, sendAfterLoad = false) {
+    if (busy) return;
     const version = ++requestVersion.current;
     setTab(next); setMessage(""); setDirty(false); setEditUrl("");
     setStory(null); setHistory(null); setConnection(null); setTaxonomy({ categories: [], tags: [] });
@@ -53,6 +55,10 @@ export function EditorialDesk({ selected, onRefresh, ref }: { selected: Selected
         setStory(data); saved.current = JSON.stringify(data);
         const connected = await editorialRequest<{ connected: boolean; enabled: boolean; detail?: string }>("wordpress/connection");
         setConnection(connected);
+        if (sendAfterLoad) {
+          await startHandoff(selected.id);
+          return;
+        }
         if (connected.connected) setTaxonomy(await editorialRequest<Taxonomy>("wordpress/taxonomy"));
       } else if (next === "history" && selected) {
         setHistory(await editorialRequest<History>(`cases/${selected.id}/history`));
@@ -61,7 +67,10 @@ export function EditorialDesk({ selected, onRefresh, ref }: { selected: Selected
       }
     } catch (error) { setMessage((error as Error).message); } finally { setBusy(false); }
   }
-  useImperativeHandle(ref, () => ({ openStory: () => { void open("story"); } }));
+  useImperativeHandle(ref, () => ({ sendDraft: () => { void open("story", true); } }));
+  useEffect(() => {
+    if (message) feedback.current?.scrollIntoView({ block: "nearest" });
+  }, [message]);
   useEffect(() => {
     function update(data: Operations) {
       setOperations(data);
@@ -93,13 +102,24 @@ export function EditorialDesk({ selected, onRefresh, ref }: { selected: Selected
       setStory(result); saved.current = JSON.stringify(result); setDirty(false); setMessage("Story saved.");
     } catch (error) { setMessage((error as Error).message); } finally { setBusy(false); }
   }
+  async function startHandoff(caseId: string, reconcile = false) {
+    setMessage("Opening WordPress sign-in…");
+    const response = await fetch("/api/wordpress/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ case_id: caseId, reconcile }), signal: AbortSignal.timeout(45000) });
+    const result = await response.json();
+    if (!response.ok) throw new Error(typeof result.detail === "string" ? result.detail : "WordPress sign-in could not be opened.");
+    if (!result.redirect_url) throw new Error("WordPress did not return a sign-in link. Please try again.");
+    window.location.assign(result.redirect_url);
+  }
   async function send(reconcile = false) {
-    if (!selected || dirty) { setMessage("Save your changes before sending the draft."); return; }
+    if (!selected || !story || busy) return;
     setBusy(true); setMessage("");
     try {
-      const result = await editorialRequest<{ edit_url: string }>(`cases/${selected.id}/wordpress${reconcile ? "/reconcile" : ""}`, {});
-      setEditUrl(result.edit_url); setMessage("Your draft is ready in WordPress.");
-      setStory(await editorialRequest<Story>(`cases/${selected.id}/story`));
+      if (reconcile && dirty) throw new Error("Save your changes before checking the previous handoff.");
+      if (dirty) {
+        const result = await editorialRequest<Story>(`cases/${selected.id}/story`, { ...story, expected_revision: story.revision });
+        setStory(result); saved.current = JSON.stringify(result); setDirty(false);
+      }
+      await startHandoff(selected.id, reconcile);
     } catch (error) { setMessage((error as Error).message); } finally { setBusy(false); }
   }
   async function refresh() {
@@ -125,13 +145,13 @@ export function EditorialDesk({ selected, onRefresh, ref }: { selected: Selected
       <div className="edition-command-actions">
         <button type="button" onClick={() => void open("connections")}><span className={operations?.worker_online ? "live-dot" : "idle-dot"}/>{latest?.status === "running" ? "Refreshing edition" : "Sources & schedule"}</button>
         <button type="button" disabled={!selected?.latest_collage} onClick={() => void open("history")}>Version history</button>
-        <button type="button" className="edition-primary" disabled={!selected?.latest_collage} onClick={() => void open("story")} title={selected?.latest_collage ? "Review the story and send a draft to WordPress" : "Select a look with a saved collage first"}>Send WordPress draft</button>
+        <button type="button" className="edition-primary" disabled={busy || !selected?.latest_collage} onClick={() => void open("story", true)} title={selected?.latest_collage ? "Continue to WordPress with this saved story" : "Select a look with a saved collage first"}>Send WordPress draft</button>
         <button type="button" className="edition-primary" disabled={!selected} onClick={() => void open("story")}>Write story <span aria-hidden>↗</span></button>
       </div>
     </section>
     <dialog className="edition-dialog" ref={dialog} onCancel={event => { event.preventDefault(); close(); }}>
       <header><div><small>High Heel Confidential / Editorial studio</small><h2>{tab === "story" ? "The story behind the look." : tab === "history" ? "Every edit, kept." : "A fresh edition. Every day."}</h2></div><button type="button" onClick={close} aria-label="Close editorial workspace">×</button></header>
-      {message && <p className="edition-message" role="status">{message}</p>}
+      {message && !(tab === "story" && story) && <p ref={feedback} className="edition-message" role="status">{message}</p>}
       {busy && <div className="edition-progress" role="progressbar" aria-label="Working" />}
       {tab === "story" && story && selected && <div className="edition-compose">
         <aside className="edition-proof">
@@ -151,12 +171,13 @@ export function EditorialDesk({ selected, onRefresh, ref }: { selected: Selected
             <label>Designer & celebrity tags<select multiple value={story.tag_ids.map(String)} onChange={e => change({ tag_ids: [...e.target.selectedOptions].map(o => Number(o.value)) })}>{taxonomy.tags.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}</select></label>
           </div>}
           <label className="edition-check"><input type="checkbox" disabled={!selected.latest_collage} checked={Boolean(selected.latest_collage && story.reviewed_collage_id === selected.latest_collage.id)} onChange={e => change({ reviewed_collage_id: e.target.checked ? selected.latest_collage?.id || null : null })} /><span>I have checked the selected photos, their usage rights, credits and outfit attribution.</span></label>
-          <footer><button type="submit" className="edition-primary" disabled={busy}>Save story</button><button type="button" disabled={busy || dirty || !connection?.connected || !connection.enabled || !selected.latest_collage} onClick={() => void send()}>Send WordPress draft ↗</button></footer>
-          {!connection?.connected && <p className="edition-hint">{connection?.detail || "Connect by signing in with your WordPress Application Password."}</p>}
-          {connection?.connected && !connection.enabled && <p className="edition-hint">Your site is connected. An administrator must enable the draft handoff.</p>}
+          <footer><button type="submit" className="edition-primary" disabled={busy}>Save story</button><button type="button" disabled={busy} onClick={() => void send()}>Send WordPress draft ↗</button></footer>
+          <p className="edition-hint">Saves your edits, then opens WordPress to sign in and create your draft.</p>
+          {connection && !connection.enabled && <p className="edition-hint">WordPress draft sending needs to be enabled in this installation.</p>}
           {["uncertain", "sending"].includes(story.sync_state) && <button type="button" onClick={() => void send(true)} disabled={busy}>Check previous handoff</button>}
           {editUrl && <a className="edition-wordpress-link" href={editUrl} target="_blank" rel="noreferrer">Open draft in WordPress ↗</a>}
         </form>
+        {message && <p ref={feedback} className="edition-message" role="status" style={{ gridColumn: "1 / -1" }}>{message}</p>}
       </div>}
       {tab === "history" && <div className="edition-history">
         <div className="edition-version-grid">{history?.versions.map((v, i) => <article key={v.id}><a href={photo(v.preview_url)} target="_blank" rel="noreferrer"><img src={photo(v.preview_url)} alt={`Collage revision saved ${new Date(v.created_at).toLocaleString()}`} /></a><div><strong>{i === 0 ? "Latest version" : `Version ${history.versions.length - i}`}</strong><small>{new Date(v.created_at).toLocaleString()}</small><button type="button" disabled={busy || i === 0} onClick={() => void restore(v.id)}>Restore as new draft</button></div></article>)}</div>

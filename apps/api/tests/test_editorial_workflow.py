@@ -189,6 +189,67 @@ def test_uncertain_wordpress_handoff_is_not_blindly_retried(studio, monkeypatch)
     assert client.post("/api/cases/editorial-case/wordpress", headers=headers, json={}).status_code == 409
     assert writes == ["media"]
 
+
+@pytest.fixture()
+def wordpress_redirect(studio, monkeypatch):
+    from app import wordpress
+    client, headers, factory = studio
+    monkeypatch.setattr(main.settings, "wordpress_publisher_enabled", True)
+    generated = render(client, headers)
+    assert client.post("/api/cases/editorial-case/story", headers=headers, json={"title": "The look", "body": "Editorial story", "alt_text": "Outfit", "credits": "Photo agency", "expected_revision": 0, "reviewed_collage_id": generated["id"]}).status_code == 200
+    session_id = "c" * 64
+    assert client.post("/api/internal/sessions", headers=headers, json={"id": session_id, "actor": "Local editor", "expires_at": int(time.time()) + 600}).status_code == 200
+    writes = []
+    def request(auth, method, path, **kwargs):
+        assert auth == "Basic dGVzdA=="
+        if path == "users/me":
+            return {"capabilities": {"edit_posts": True, "upload_files": True}}
+        if method == "GET":
+            return []
+        writes.append((path, kwargs))
+        return {"id": 101, "source_url": "https://example.com/photo.webp"} if path == "media" else {"id": 202, "status": "draft"}
+    monkeypatch.setattr(wordpress, "wp_request", request)
+    pending = client.post("/api/internal/wordpress-handoffs", headers=headers, json={"case_id": "editorial-case", "session_id": session_id})
+    assert pending.status_code == 200, pending.text
+    yield client, headers, factory, pending.json()["id"], session_id, writes
+
+
+def test_wordpress_redirect_claim_is_single_use_and_draft_only(wordpress_redirect):
+    client, headers, factory, identifier, _, writes = wordpress_redirect
+    assert writes == []  # Preparing a redirect never writes to WordPress.
+    path = f"/api/internal/wordpress-handoffs/{identifier}/complete"
+    signed = {**headers, "X-WP-Authorization": "Basic dGVzdA==", "X-Editor-Id": "wordpress-editor"}
+    assert client.post(path).status_code == 401
+    assert client.post(path, headers=signed).json()["post_id"] == 202
+    assert client.post(path, headers=signed).status_code == 409
+    assert [path for path, _ in writes] == ["media", "posts"]
+    assert writes[-1][1]["json"]["status"] == "draft"
+    with factory() as db:
+        assert db.scalar(select(AuditEvent).where(AuditEvent.action == "wordpress_draft_sent")).actor == "wordpress-editor"
+
+
+@pytest.mark.parametrize("change", ["story", "collage", "expired", "logout"])
+def test_wordpress_redirect_rejects_stale_or_revoked_intent(wordpress_redirect, change):
+    from app.models import ServiceState
+    client, headers, factory, identifier, session_id, writes = wordpress_redirect
+    if change == "story":
+        with factory() as db:
+            story = db.get(StoryDraft, "editorial-case")
+            story.revision += 1
+            db.commit()
+    elif change == "collage":
+        render(client, headers, 1)
+    elif change == "expired":
+        with factory() as db:
+            state = db.get(ServiceState, f"wordpress-handoff:{identifier}")
+            state.value = {**state.value, "expires_at": 0}
+            db.commit()
+    else:
+        client.delete(f"/api/internal/sessions/{session_id}", headers=headers)
+    response = client.post(f"/api/internal/wordpress-handoffs/{identifier}/complete", headers={**headers, "X-WP-Authorization": "Basic dGVzdA=="})
+    assert response.status_code in {401, 409, 422}
+    assert writes == []
+
 def test_context_corrections_are_versioned_and_invalidate_old_review(studio):
     client, headers, factory = studio
     rendered = render(client, headers)

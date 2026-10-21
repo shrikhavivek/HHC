@@ -1,17 +1,20 @@
 """Explicit, review-gated WordPress draft handoff with duplicate recovery."""
 import html
 import json
+import secrets
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 import requests
 from fastapi import APIRouter, Depends, Header, HTTPException
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from .config import get_settings
 from .database import get_db
 from .editorial import locked_state
-from .models import AuditEvent, Candidate, Case, Collage, StoryDraft
+from .models import AuditEvent, Candidate, Case, Collage, EditorSession, ServiceState, StoryDraft
 from .review import approval_errors
 from .security import current_actor
 
@@ -39,7 +42,7 @@ def wp_request(authorization, method, path, **kwargs):
 @router.get("/wordpress/connection")
 def connection(x_wp_authorization: str = Header(default="")):
     if not x_wp_authorization:
-        return {"connected": False, "enabled": get_settings().wordpress_publisher_enabled, "detail": "Demo login is local. Sign in with WordPress to connect."}
+        return {"connected": False, "enabled": get_settings().wordpress_publisher_enabled, "detail": "Sign in on WordPress when you send your draft."}
     user = wp_request(x_wp_authorization, "GET", "users/me", params={"context": "edit"})
     if not user.get("capabilities", {}).get("edit_posts") or not user.get("capabilities", {}).get("upload_files"):
         raise HTTPException(403, "WordPress edit_posts and upload_files permissions are required")
@@ -74,6 +77,63 @@ def handoff_manifest(db, case_id):
             if not candidate or not latest or latest.decision != "approved" or approval_errors(candidate):
                 raise HTTPException(422, "Approve each historical match before the WordPress handoff")
     return story, collage, manifest
+
+
+class HandoffInput(BaseModel):
+    case_id: str = Field(pattern=r"^[a-zA-Z0-9_-]{1,128}$")
+    session_id: str = Field(pattern=r"^[a-f0-9]{64}$")
+    reconcile: bool = False
+
+
+def require_handoff_session(db, session_id):
+    session = db.get(EditorSession, session_id)
+    if not session or session.expires_at.replace(tzinfo=timezone.utc).timestamp() <= time.time():
+        raise HTTPException(401, "Your studio session expired. Return to the editor.")
+    return session
+
+
+@router.post("/internal/wordpress-handoffs")
+def prepare_handoff(payload: HandoffInput, db: Session = Depends(get_db)):
+    if not get_settings().wordpress_publisher_enabled:
+        raise HTTPException(409, "WordPress draft sending is not enabled")
+    require_handoff_session(db, payload.session_id)
+    if payload.reconcile:
+        story = db.get(StoryDraft, payload.case_id)
+        if not story:
+            raise HTTPException(404, "Save your story first")
+        collage_id = story.reviewed_collage_id
+    else:
+        story, collage, _ = handoff_manifest(db, payload.case_id)
+        collage_id = collage.id
+        if story.sync_state in {"sending", "uncertain"}:
+            raise HTTPException(409, "Use Check previous handoff before sending again")
+    identifier = secrets.token_hex(32)
+    expires_at = int(time.time()) + 900
+    db.add(ServiceState(key=f"wordpress-handoff:{identifier}", value={
+        "case_id": payload.case_id, "session_id": payload.session_id,
+        "revision": story.revision, "collage_id": collage_id,
+        "reconcile": payload.reconcile, "expires_at": expires_at, "used": False,
+    }))
+    db.commit()
+    return {"id": identifier, "expires_at": expires_at}
+
+
+@router.post("/internal/wordpress-handoffs/{identifier}/complete")
+def complete_handoff(identifier: str, x_wp_authorization: str = Header(default=""), db: Session = Depends(get_db)):
+    state = db.scalar(select(ServiceState).where(ServiceState.key == f"wordpress-handoff:{identifier}").with_for_update())
+    if not state or state.value.get("used") or state.value.get("expires_at", 0) <= time.time():
+        raise HTTPException(409, "This WordPress handoff expired or has already been used")
+    flow = state.value
+    require_handoff_session(db, flow["session_id"])
+    locked_state(db, f"story:{flow['case_id']}", {})
+    if not flow["reconcile"]:
+        story, collage, _ = handoff_manifest(db, flow["case_id"])
+        if story.revision != flow["revision"] or collage.id != flow["collage_id"]:
+            raise HTTPException(409, "The story changed during sign-in. Review it and send again.")
+    state.value = {**flow, "used": True}
+    # The draft operation commits this single-use claim along with its sending
+    # state, while holding the story lock. Replayed callbacks cannot send twice.
+    return reconcile(flow["case_id"], x_wp_authorization, db) if flow["reconcile"] else send_draft(flow["case_id"], x_wp_authorization, db)
 
 @router.post("/cases/{case_id}/wordpress")
 def send_draft(case_id: str, x_wp_authorization: str = Header(default=""), db: Session = Depends(get_db)):

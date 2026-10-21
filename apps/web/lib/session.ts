@@ -2,7 +2,7 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from "crypt
 import type { NextRequest } from "next/server";
 export const SESSION_COOKIE = "hhc_editor_session";
 export const sessionMaxAge = 60 * 60 * 8;
-export type EditorSession = { id: string; username: string; site: string; exp: number; demo: boolean; authorization?: string };
+export type EditorSession = { id: string; username: string; site: string; exp: number; demo: boolean; studio?: boolean; authorization?: string };
 function key() {
   const value = process.env.SESSION_SECRET || "";
   if (value.length < 32 || (process.env.APP_ENV === "production" && /^(local-|replace-)/.test(value))) throw new Error("Configure a random SESSION_SECRET");

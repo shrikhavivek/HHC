@@ -10,6 +10,9 @@ const nextConfig: NextConfig = {
       { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
       { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
       ...(process.env.APP_ENV === "production" ? [{ key: "Strict-Transport-Security", value: "max-age=31536000; includeSubDomains" }] : []),
+    ] }, { source: "/api/wordpress/:path*", headers: [
+      { key: "Referrer-Policy", value: "no-referrer" },
+      { key: "Cache-Control", value: "no-store" },
     ] }];
   },
 };

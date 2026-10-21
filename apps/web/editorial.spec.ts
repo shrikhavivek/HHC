@@ -10,7 +10,8 @@ test("timeless login layout fits desktop and mobile", async ({ page }) => {
     await page.goto("/");
     await expect(page.getByRole("heading", { name: "Welcome to the studio." })).toBeVisible();
     await page.evaluate(() => document.fonts.ready);
-    await page.getByRole("button", { name: "Enter the studio" }).scrollIntoViewIfNeeded();
+    await page.getByRole("button", { name: "Unleash your editorial eye" }).scrollIntoViewIfNeeded();
+    await expect(page.locator("input")).toHaveCount(0);
     const backgroundBounds = await page.locator(".auth-editorial-image").boundingBox();
     const pageBounds = await page.locator(".auth-shell").boundingBox();
     expect(backgroundBounds).toEqual(pageBounds);
@@ -27,7 +28,7 @@ for (const width of [1440, 1024, 768, 390, 320]) {
     await expect(page.locator(".auth-editorial-image")).toBeVisible();
     await page.evaluate(() => document.fonts.ready);
     await expect.poll(() => page.locator(".auth-editorial-image").evaluate(image => (image as HTMLImageElement).complete && (image as HTMLImageElement).naturalWidth > 0)).toBe(true);
-    await page.getByLabel("Username", { exact: true }).scrollIntoViewIfNeeded();
+    await page.getByRole("button", { name: "Unleash your editorial eye" }).scrollIntoViewIfNeeded();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
     await page.screenshot({ path: `test-results/pop-login-${width}.png`, fullPage: true, animations: "disabled" });
     await login(page);
@@ -42,21 +43,16 @@ test("flowing login recovers from connection errors with reduced motion", async 
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/");
   expect(await page.locator(".auth-form").evaluate(element => getComputedStyle(element).animationName)).toBe("none");
-  await page.getByLabel("Username", { exact: true }).fill("sample-editor");
-  await page.getByLabel("Password", { exact: true }).fill("sample-password");
-  await page.getByRole("button", { name: "Show", exact: true }).click();
-  await expect(page.getByLabel("Password", { exact: true })).toHaveAttribute("type", "text");
-  await page.getByRole("button", { name: "Hide", exact: true }).click();
-  await expect(page.getByLabel("Password", { exact: true })).toHaveAttribute("type", "password");
-  await page.route("**/api/auth/login", route => route.abort());
-  await page.getByRole("button", { name: "Enter the studio" }).click();
+  await expect(page.locator("input")).toHaveCount(0);
+  await page.route("**/api/auth/enter", route => route.abort());
+  await page.getByRole("button", { name: "Unleash your editorial eye" }).click();
   await expect(page.locator(".auth-error")).toContainText("Please try again");
   await expect(page.locator(".auth-error")).toBeFocused();
-  await expect(page.getByRole("button", { name: "Enter the studio" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Unleash your editorial eye" })).toBeEnabled();
 });
 
 async function login(page: import("@playwright/test").Page, workspace: "editor" | "instagram" = "editor") {
-  const ready = () => workspace === "instagram" ? expect(page.getByRole("region", { name: "Instagram discovery", exact: true })).toBeVisible() : expect(page.getByRole("button", { name: "Write story" })).toBeEnabled();
+  const ready = () => workspace === "instagram" ? expect(page.getByRole("region", { name: "Instagram discovery", exact: true })).toBeVisible() : expect(page.getByRole("button", { name: "Write story" })).toBeEnabled({ timeout: 15000 });
   if (sessionCookies) {
     await page.context().addCookies(sessionCookies);
     if ((await page.request.get("/api/auth/session")).ok()) {
@@ -67,13 +63,19 @@ async function login(page: import("@playwright/test").Page, workspace: "editor" 
     await page.context().clearCookies();
   }
   await page.goto("/");
-  await page.getByLabel("Username", { exact: true }).fill(username);
-  await page.getByLabel("Password", { exact: true }).fill(password);
-  await page.getByRole("button", { name: /^(Sign in|Enter the studio)$/ }).click();
+  await page.getByRole("button", { name: "Unleash your editorial eye" }).click();
   await expect(page).toHaveURL(/dashboard/);
   sessionCookies = await page.context().cookies();
-  await expect(page.getByRole("button", { name: "Write story" })).toBeEnabled();
+  await ready();
 }
+
+test("WordPress return route keeps callback URLs private", async ({ request }) => {
+  const response = await request.get("/api/wordpress/callback?state=invalid", { maxRedirects: 0 });
+  expect(response.status()).toBe(303);
+  expect(response.headers()["referrer-policy"]).toBe("no-referrer");
+  expect(response.headers()["cache-control"]).toBe("no-store");
+  expect(response.headers().location).toMatch(/\/wordpress\/result\?status=expired$/);
+});
 
 test("editorial polish supports mobile navigation and empty search", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
@@ -115,17 +117,14 @@ test("editorial polish loads its typography and artwork locally", async ({ page 
   await expect(page.getByRole("link", { name: "Skip to content" })).toBeFocused();
   expect((await page.request.get("/icon.svg")).status()).toBe(200);
 });
-test("editorial polish login preserves input and presents rate-limit feedback", async ({ page }) => {
+test("studio entrance presents service errors without credential fields", async ({ page }) => {
   await page.goto("/");
-  await page.getByLabel("Username", { exact: true }).fill("sample-editor");
-  await page.getByLabel("Password", { exact: true }).fill("sample-password");
-  await page.route("**/api/auth/login", route => route.fulfill({ status: 429, contentType: "application/json", body: JSON.stringify({ detail: "Too many attempts. Try again in 15 minutes." }) }));
-  await page.getByRole("button", { name: "Enter the studio" }).click();
-  await expect(page.locator(".auth-error")).toHaveText("Too many attempts. Try again in 15 minutes.");
+  await page.route("**/api/auth/enter", route => route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "The studio could not be reached. Please try again." }) }));
+  await page.getByRole("button", { name: "Unleash your editorial eye" }).click();
+  await expect(page.locator(".auth-error")).toHaveText("The studio could not be reached. Please try again.");
   await expect(page.locator(".auth-error")).toBeFocused();
-  await expect(page.getByLabel("Username", { exact: true })).toHaveValue("sample-editor");
-  await expect(page.getByLabel("Password", { exact: true })).toHaveValue("sample-password");
-  await expect(page.getByRole("button", { name: "Enter the studio" })).toBeEnabled();
+  await expect(page.locator("input")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Unleash your editorial eye" })).toBeEnabled();
 });
 
 test("editorial polish keeps a uniform canvas without header photos", async ({ page }) => {
@@ -616,8 +615,14 @@ for (const width of [1440, 390]) {
   });
 }
 
-for (const scenario of [{ width: 1440, connected: true }, { width: 390, connected: true }, { width: 1440, connected: false }]) {
-  test(`WordPress draft action is discoverable at ${scenario.width}, connected=${scenario.connected}`, async ({ page }) => {
+for (const scenario of [
+  { width: 1440, connected: true, action: "toolbar" },
+  { width: 390, connected: false, action: "preview" },
+  { width: 1440, connected: false, action: "edited story" },
+  { width: 390, connected: false, action: "blocked story" },
+  { width: 1440, connected: false, action: "save failure" },
+]) {
+  test(`WordPress draft action redirects or explains the blocker: ${scenario.action}`, async ({ page }) => {
     await page.setViewportSize({ width: scenario.width, height: 900 });
     const now = new Date().toISOString();
     const item = {
@@ -631,6 +636,8 @@ for (const scenario of [{ width: 1440, connected: true }, { width: 390, connecte
     };
     let story = { title: "A reviewed look", body: "The completed story.", alt_text: "A fashion collage", credits: "Photo credit", category_ids: [], tag_ids: [], revision: 1, reviewed_collage_id: "collage-1", sync_state: "local" };
     let sends = 0;
+    let saves = 0;
+    let rejectSend = scenario.action === "blocked story";
     await page.route("**/media/**", route => route.fulfill({ contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="500"><rect width="400" height="500" fill="#805465"/></svg>' }));
     await page.route("**/api/**", async route => {
       const path = new URL(route.request().url()).pathname;
@@ -645,41 +652,66 @@ for (const scenario of [{ width: 1440, connected: true }, { width: 390, connecte
       else if (path.endsWith("/instagram-browser/status")) data = { status: "not_run" };
       else if (path.endsWith("/wordpress/connection")) data = { connected: scenario.connected, enabled: true };
       else if (path.endsWith("/wordpress/taxonomy")) data = { categories: [], tags: [] };
-      else if (path.endsWith("/story")) data = story;
-      else if (path.endsWith("/wordpress") && route.request().method() === "POST") {
+      else if (path.endsWith("/story")) {
+        if (route.request().method() === "POST") {
+          saves++;
+          if (scenario.action === "save failure") {
+            await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ detail: "Story changed in another window. Reload before saving." }) });
+            return;
+          }
+          story = { ...story, ...route.request().postDataJSON(), revision: story.revision + 1 };
+        }
+        data = story;
+      }
+      else if (path === "/api/wordpress/start" && route.request().method() === "POST") {
         sends++;
+        if (rejectSend) {
+          await route.fulfill({ status: 422, contentType: "application/json", body: JSON.stringify({ detail: "Confirm the sources and usage rights for the latest collage" }) });
+          return;
+        }
         story = { ...story, sync_state: "draft_created" };
-        data = { edit_url: "https://example.com/wp-admin/post.php?post=123&action=edit" };
+        expect(route.request().postDataJSON()).toEqual({ case_id: item.id, reconcile: false });
+        data = { redirect_url: "/wordpress/result?status=cancelled" };
       }
       await route.fulfill({ contentType: "application/json", body: JSON.stringify(data) });
     });
     await page.goto("/dashboard");
     const action = page.getByRole("region", { name: "Editorial tools" }).getByRole("button", { name: "Send WordPress draft", exact: true });
     await expect(action).toBeEnabled();
-    await action.click();
     const dialog = page.locator(".edition-dialog");
-    await expect(dialog.getByLabel("Headline", { exact: true })).toHaveValue(story.title);
-    await expect(dialog.getByRole("progressbar")).toHaveCount(0);
-    expect(sends).toBe(0);
     const send = dialog.getByRole("button", { name: /Send WordPress draft/ });
-    if (!scenario.connected) {
-      await expect(send).toBeDisabled();
-      await expect(dialog.getByText("Connect by signing in with your WordPress Application Password.")).toBeVisible();
-      return;
+    if (scenario.action === "preview") {
+      await page.getByRole("button", { name: "View collage", exact: true }).click();
+      await page.locator(".collage-result-modal").getByRole("button", { name: "Send WordPress draft", exact: true }).click();
+    } else if (["edited story", "save failure"].includes(scenario.action)) {
+      await page.getByRole("button", { name: "Write story" }).click();
+      await expect(send).toBeEnabled();
+      await dialog.getByLabel("Headline", { exact: true }).fill("Updated headline");
+      await expect(send).toBeEnabled();
+      await send.click();
+      if (scenario.action === "save failure") {
+        await expect(dialog.getByRole("status")).toHaveText(/Story changed in another window/);
+        await expect(dialog.getByRole("status")).toBeInViewport();
+        expect(sends).toBe(0);
+        await expect(dialog.getByLabel("Headline", { exact: true })).toHaveValue("Updated headline");
+        return;
+      }
+    } else {
+      await action.click();
     }
-    await expect(send).toBeEnabled();
-    await page.getByRole("button", { name: "Close editorial workspace" }).click();
-    await page.getByRole("button", { name: "View collage", exact: true }).click();
-    const preview = page.locator(".collage-result-modal");
-    const previewAction = preview.getByRole("button", { name: "Send WordPress draft", exact: true });
-    await expect(previewAction).toBeVisible();
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    await previewAction.click();
-    await expect(preview).toHaveCount(0);
-    await expect(send).toBeEnabled();
-    expect(sends).toBe(0);
-    await send.click();
-    await expect(dialog.getByRole("link", { name: /Open draft in WordPress/ })).toHaveAttribute("href", /post=123/);
-    expect(sends).toBe(1);
+    if (rejectSend) {
+      await expect(dialog.getByRole("status")).toHaveText("Confirm the sources and usage rights for the latest collage");
+      await expect(dialog.getByRole("status")).toBeInViewport();
+      await expect(send).toBeEnabled();
+      rejectSend = false;
+      await send.click();
+    }
+    await expect(page).toHaveURL(/\/wordpress\/result\?status=cancelled/);
+    await expect(page.getByText(/WordPress sign-in was cancelled/)).toBeVisible();
+    expect(sends).toBe(scenario.action === "blocked story" ? 2 : 1);
+    if (scenario.action === "edited story") {
+      expect(saves).toBe(1);
+      expect(story.title).toBe("Updated headline");
+    }
   });
 }

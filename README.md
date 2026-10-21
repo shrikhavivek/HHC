@@ -24,7 +24,9 @@ Then run:
 docker compose up -d --build
 ```
 
-Open http://localhost:3100 and use the demonstration credentials above.
+Open http://localhost:3100 and click **Unleash your editorial eye** to enter
+the local editor without credentials. WordPress sign-in happens only when sending
+a reviewed draft. The password-free entrance is disabled in production.
 Demo sign-in is disabled by default and always disabled in production.
 Demonstration cases use clearly identified placeholder images; they cannot
 be sent to WordPress. No live provider access is implied by demo data.
@@ -295,13 +297,28 @@ can retry. The app needs to remain running for daily refresh to occur.
 
 ## WordPress
 
-Set `WORDPRESS_SITE_URL` to the client's HTTPS site. Sign in using a WordPress
-Application Password from an account with `edit_posts` and `upload_files`.
-Set `WORDPRESS_PUBLISHER_ENABLED=true` to allow explicit draft handoffs.
+Set `WORDPRESS_SITE_URL` to the site's HTTPS home URL and
+`WORDPRESS_PUBLISHER_ENABLED=true` to allow explicit draft handoffs.
+After saving and reviewing the story, **Send WordPress draft** redirects to the
+site's own WordPress sign-in/authorization page. Use the normal WordPress login
+there and approve the studio connection. The app creates the draft and opens
+its WordPress editor; publishing remains a manual action. The account needs
+`edit_posts` and `upload_files` permissions.
 
-Credentials are encrypted in an HttpOnly, SameSite session cookie; sessions
-expire after eight hours and logout revokes the server-side session record.
-Local demo sessions cannot connect to WordPress.
+The app discovers the site's WordPress install path, including HHC's `/wp` path.
+For local HTTP, it uses a `127.0.0.1` callback, which WordPress permits, and a
+short-lived HttpOnly cookie to bind the return to the initiating browser. A
+single-use server record expires after 15 minutes and rejects changed stories,
+expired studio sessions and replayed callbacks. Cancellation preserves local
+work. The generated application password is used only for that handoff and
+revoked on a best-effort basis afterward; if the site is unreachable during
+revocation, it can be removed in the WordPress user's profile. Do not enable
+access logging of callback query strings: WordPress returns the temporary
+credential in its authorization response. Responses use no-store/no-referrer.
+
+Studio sessions expire after eight hours and logout revokes the server record.
+Existing credential-based sign-in remains available at the authentication API
+for installations that use it, but the local entrance has no credential form.
 
 Only drafts are created. The handoff uploads the reviewed image, credits,
 image description, categories and tags. Historical panels require the latest
