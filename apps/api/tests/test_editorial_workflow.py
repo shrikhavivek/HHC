@@ -43,6 +43,20 @@ def render(client, headers, revision=0):
     assert response.status_code == 200, response.text
     return response.json()
 
+def test_layout_previews_are_authenticated_and_distinct(studio):
+    client, headers, _ = studio
+    payload = {"photos": [{"width": 200, "height": 400}, {"width": 400, "height": 400}], "canvas_format": "instagram_portrait"}
+    assert client.post("/api/collage/layouts", json=payload).status_code == 401
+    response = client.post("/api/collage/layouts", headers=headers, json=payload)
+    assert response.status_code == 200
+    layouts = response.json()
+    assert len({str(value) for value in layouts.values()}) == 4
+    assert layouts["side_by_side"] == {"width": 1080, "height": 720, "cells": [[0, 0, 360, 720], [360, 0, 720, 720]]}
+    for layout in layouts.values():
+        assert sum(width * height for _, _, width, height in layout["cells"]) == layout["width"] * layout["height"]
+    assert client.post("/api/collage/layouts", headers=headers, json={"photos": []}).status_code == 422
+
+
 def test_private_reads_and_media_require_authentication(studio):
     client, _, _ = studio
     for path in ("/api/cases", "/api/dashboard", "/outputs/anything.webp", "/media-files/a.jpg", "/static/look-1.png", "/docs", "/api/operations"):

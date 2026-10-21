@@ -1,7 +1,7 @@
 import { defineConfig } from "@playwright/test";
 export default defineConfig({
   testDir: ".",
-  testMatch: ["editorial.spec.ts", "instagram-carousel.spec.mjs", "instagram-hashtags.spec.ts"],
+  testMatch: ["editorial.spec.ts", "instagram-carousel.spec.mjs", "instagram-login.spec.mjs"],
   fullyParallel: false,
   workers: 1,
   timeout: 60000,

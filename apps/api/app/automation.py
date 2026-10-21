@@ -2220,7 +2220,7 @@ def _saved_canvas_format(case: Case) -> str:
 def _saved_layout_template(case: Case) -> str:
     extraction = case.extraction if isinstance(case.extraction, dict) else {}
     edit = extraction.get("collage_edit")
-    if isinstance(edit, dict) and edit.get("layout_template") in {"balanced_grid", "hero_focus", "editorial_split"}:
+    if isinstance(edit, dict) and edit.get("layout_template") in {"balanced_grid", "hero_focus", "editorial_split", "side_by_side"}:
         return str(edit["layout_template"])
     return "balanced_grid"
 

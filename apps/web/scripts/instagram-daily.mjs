@@ -1,21 +1,14 @@
 import { chromium } from "@playwright/test";
-import { mkdir, readFile } from "node:fs/promises";
-import { parseEnv } from "node:util";
+import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { postIdentity, qualifyPost, readPostDocument } from "./instagram-daily-rules.mjs";
 import { captureCarousel } from "./instagram-carousel.mjs";
-import { runHashtagSearch } from "./instagram-hashtags.mjs";
+import { waitForInstagramLogin, InstagramAccessBlocked, InstagramLoginCancelled, InstagramIntakePaused } from "./instagram-login.mjs";
+import { request } from "./instagram-local-api.mjs";
 
-const repository = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
-let environment = {};
-try { environment = parseEnv(await readFile(join(repository, ".env"), "utf8")); } catch {}
-const apiKey = process.env.EDITOR_API_KEY || environment.EDITOR_API_KEY || (environment.APP_ENV === "production" ? "" : "local-editor-key");
-if (!apiKey) throw new Error("Configure the local API editor key before starting the collector.");
-const api = "http://127.0.0.1:8100/api/instagram-browser";
 const dryRun = process.argv.includes("--dry-run");
 const limitIndex = process.argv.indexOf("--limit");
 const limit = limitIndex < 0 ? 200 : Number(process.argv[limitIndex + 1]);
@@ -24,14 +17,7 @@ const handleIndex = process.argv.indexOf("--handle");
 const selectedHandle = handleIndex < 0 ? null : process.argv[handleIndex + 1]?.toLowerCase();
 if (handleIndex >= 0 && !/^[a-z0-9._]{1,30}$/.test(selectedHandle || "")) throw new Error("Supply a valid watched handle.");
 
-async function request(path, body, form = false) {
-  const response = await fetch(api + path, { method: body ? "POST" : "GET", headers: { "X-Editor-Key": apiKey, "X-Editor-Id": "local-instagram-browser", ...(body && !form ? { "Content-Type": "application/json" } : {}) }, body: body ? form ? body : JSON.stringify(body) : undefined, redirect: "error", signal: AbortSignal.timeout(120000) });
-  const data = await response.json();
-  if (!response.ok) throw new Error(`Local API ${response.status}: ${typeof data.detail === "string" ? data.detail : "request rejected"}`);
-  return data;
-}
-
-class AccessBlocked extends Error {}
+class AccessBlocked extends InstagramAccessBlocked {}
 async function accessCheck(page) {
   if (/\/(accounts|challenge|checkpoint)\//.test(new URL(page.url()).pathname) || await page.locator('input[type="password"], form[action*="challenge"], form[action*="captcha"]').count() || await page.getByText(/try again later|we restrict certain activity|automated behavior|confirm you're human|unusual activity/i).count()) {
     throw new AccessBlocked("Instagram requires sign-in, verification, or has restricted access. Open the local trial browser yourself; no automatic retry was attempted.");
@@ -41,10 +27,6 @@ async function accessCheck(page) {
 const queued = process.argv.includes("--queued");
 const claimed = queued ? (await request("/claim", {})).run : null;
 if (queued && !claimed) process.exit(0);
-if (claimed?.kind === "hashtag_search") {
-  const result = await runHashtagSearch(claimed, { request });
-  process.exit(["failed", "blocked"].includes(result.status) ? 1 : 0);
-}
 const config = await request("/config");
 if (config.timezone !== "Asia/Kolkata") throw new Error("This local collector currently requires Asia/Kolkata.");
 const summary = { run_id: claimed?.run_id || randomUUID(), status: "running", accounts_checked: 0, posts_checked: 0, imported: 0, updated: 0, detail: "Collecting photo posts and carousel slides from the signed-in Instagram browser.", exclusions: {}, current_account: "", accounts_total: 0, dry_run: dryRun };
@@ -66,7 +48,21 @@ try {
   const people = config.celebrities.filter(person => person.enabled && (!selectedHandle || person.handle.toLowerCase() === selectedHandle)).slice(0, limit);
   summary.accounts_total = people.length;
   if (selectedHandle && !people.length) throw new Error("Requested handle is not enabled in the watchlist.");
+  summary.status = "awaiting_login";
+  summary.detail = "Sign in or complete verification in the Instagram window. The scan starts automatically once you are signed in. Keep that window open.";
+  await request("/runs", summary);
+  const loginResponse = await page.goto("https://www.instagram.com/", { waitUntil: "domcontentloaded", timeout: 45000 });
+  if ([403, 429].includes(loginResponse?.status())) throw new AccessBlocked("Instagram denied access. Resolve the restriction in Instagram before starting another scan.");
+  await page.bringToFront();
+  await waitForInstagramLogin(page, {
+    onWaiting: () => request("/runs", summary),
+    isEnabled: async () => (await request("/config")).enabled,
+  });
+  summary.status = "running";
+  summary.detail = "Signed in. Scanning the saved watchlist and collecting qualifying photos.";
+  await request("/runs", summary);
   for (const person of people) {
+    if (page.isClosed()) throw new InstagramLoginCancelled("Instagram was closed. Choose Scan now to start a new scan.");
     if (!(await request("/config")).enabled) {
       summary.status = "paused";
       break;
@@ -148,6 +144,7 @@ try {
       }
       await delay(5000);
     } catch (error) {
+      if (page.isClosed()) throw new InstagramLoginCancelled("Instagram was closed. Choose Scan now to start a new scan.");
       if (error instanceof AccessBlocked || String(error.message).startsWith("Local API")) throw error;
       exclude("account_check_failed");
       incomplete = true;
@@ -156,8 +153,8 @@ try {
   if (summary.status !== "paused") summary.status = incomplete || people.length < config.celebrities.filter(person => person.enabled).length || dryRun ? "partial" : "completed";
   summary.detail = `${dryRun ? "Read-only trial. " : ""}Up to 12 post links per account, two profile scrolls. Photo carousels captured in order (up to 20 slides); video slides skipped. Incomplete galleries are reported. ${summary.updated} existing drafts expanded. No automatic publishing.`;
 } catch (error) {
-  summary.status = error instanceof AccessBlocked ? "blocked" : "failed";
-  summary.detail = error instanceof AccessBlocked ? error.message : "Collector could not complete. Check that the local app is running and close any other HHC Instagram trial window before retrying.";
+  summary.status = error instanceof InstagramAccessBlocked ? "blocked" : error instanceof InstagramLoginCancelled ? "cancelled" : error instanceof InstagramIntakePaused ? "paused" : "failed";
+  summary.detail = error instanceof InstagramAccessBlocked || error instanceof InstagramLoginCancelled || error instanceof InstagramIntakePaused ? error.message : "Collector could not complete. Check that the local app is running and close any other HHC Instagram trial window before retrying.";
 } finally {
   summary.current_account = "";
   if (context) await context.close();

@@ -366,27 +366,29 @@ test("instagram discovery unifies scanning and dated photo drafts", async ({ pag
   await expect(page.getByRole("button", { name: "Find Instagram posts", exact: true })).toHaveCount(0);
   await expect(panel.getByLabel("Celebrity watchlist", { exact: true })).not.toBeVisible();
   await panel.getByRole("button", { name: "Scan now", exact: true }).click();
-  await expect(panel.getByRole("status")).toContainText("Scan queued");
-  await expect(panel.getByRole("button", { name: "Scan in progress…", exact: true })).toBeDisabled();
+  await expect(panel.getByRole("status")).toContainText("Opening Instagram");
+  await expect(panel.getByRole("button", { name: "Opening Instagram…", exact: true })).toBeDisabled();
   expect(requested).toBe(1);
   const cases = await (await page.request.get("/api/backend/cases")).json();
   await page.route("**/api/backend/instagram-browser/posts", route => route.fulfill({ json: { results: [{ id: cases[0].id, celebrity: "Kriti Sanon", base_image: cases[0].base_image, collage_image: cases[0].base_image, photo_count: 3, carousel_complete: true, permalink: "https://www.instagram.com/p/fixture/", published_at: "2026-10-13T09:00:00+05:30", brands: ["Gucci"] }] } }));
   complete = true;
   await expect(panel.getByRole("heading", { name: "Kriti Sanon", exact: true })).toBeVisible({ timeout: 12000 });
-  await expect(panel.getByText(/Published 13 Oct/)).toBeVisible();
-  await expect(panel.getByText("Mentioned or tagged: Gucci", { exact: true })).toBeVisible();
+  await expect(panel.getByText(/13 Oct/)).toBeVisible();
+  await expect(panel.getByText("Gucci", { exact: true })).toBeVisible();
   await expect(panel.getByRole("status")).toContainText("Scan complete");
-  await expect(panel.getByText("3 photos collected · Carousel checked", { exact: true })).toBeVisible();
+  await expect(panel.getByText("3 photos", { exact: true })).toBeVisible();
   await panel.getByLabel("Filter collected photos").fill("Dior");
-  await expect(panel.getByText("No collected photos match that celebrity or brand.")).toBeVisible();
+  await expect(panel.getByText("No photos match that celebrity or brand.")).toBeVisible();
   await panel.getByLabel("Filter collected photos").fill("Kriti");
   for (const width of [1440, 390, 320]) {
     await page.setViewportSize({ width, height: 1000 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await panel.screenshot({ path: `test-results/instagram-discovery-${width}.png` });
   }
-  await panel.getByRole("button", { name: "Open editable draft", exact: true }).click();
+  await panel.getByRole("button", { name: "Open draft", exact: true }).click();
   await expect(page.locator(".review-identity h2")).toHaveText(cases[0].celebrity);
+  await expect(page.getByText("Find similar looks on Instagram", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Search signed-in Instagram", exact: true })).toHaveCount(0);
 });
 
 test("instagram discovery reports offline collector without pretending to scan", async ({ page }) => {
@@ -396,9 +398,9 @@ test("instagram discovery reports offline collector without pretending to scan",
   await login(page, "instagram");
   const panel = page.getByRole("region", { name: "Instagram discovery", exact: true });
   await panel.getByRole("button", { name: "Scan now", exact: true }).click();
-  await expect(panel.getByRole("alert")).toContainText("collector is offline");
+  await expect(panel.getByRole("alert")).toContainText("Instagram scanning is unavailable");
   await expect(panel.getByRole("button", { name: "Scan now", exact: true })).toBeEnabled();
-  await expect(panel.getByRole("status")).not.toContainText("Scan complete");
+  await expect(panel.getByRole("status")).toHaveCount(0);
 });
 
 test("instagram watchlist reports blocked scans and saves editable coverage", async ({ page }) => {
@@ -534,5 +536,150 @@ for (const viewport of [{ width: 1440, height: 720 }, { width: 1024, height: 600
     await expect(page.getByRole("button", { name: "Save & re-render", exact: true })).toBeInViewport();
     expect(await page.locator(".collage-editor-modal").evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
     await page.screenshot({ path: `test-results/editorial-scroll-${viewport.width}.png` });
+  });
+}
+
+for (const width of [1440, 390]) {
+  test(`manual crop preview and side-by-side save agree at ${width}`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    const now = new Date().toISOString();
+    const panel = { id: "current-primary", role: "current_primary", label: "Current photo", person: "Alia Bhatt", designer: "Designer", image_path: "/static/crop.svg", source_url: "https://example.com/photo", publisher: "Photographer", rights_status: "editorial_review_required", source_grade: "A" };
+    const item = { id: "crop-ui", title: "Look", celebrity: "Alia Bhatt", designer: "Designer", event_name: "Event", status: "context_review", match_type: "same_outfit", confidence: 0.9, risk_level: "low", base_image: "/crop.svg", source_type: "instagram", fashion_category: "women", created_at: now, published_at: now, candidates: [], assets: [], extraction: {}, permalink: "https://example.com/photo", latest_collage: { id: "c1", preview_url: "/crop.svg", bundle_url: "/api/bundle" }, collage_editor: { revision: 1, panels: [panel], default_ids: [panel.id], selected_ids: [panel.id], panel_options: {}, canvas_format: "instagram_portrait", layout_template: "balanced_grid" } };
+    let submitted: any;
+    const errors: string[] = [];
+    page.on("pageerror", error => errors.push(error.message));
+    await page.route("**/media/**", route => route.fulfill({ contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400"><rect width="600" height="400" fill="red"/><rect x="150" width="300" height="400" fill="lime"/></svg>' }));
+    await page.route("**/api/**", async route => {
+      const path = new URL(route.request().url()).pathname;
+      let data: unknown = {};
+      if (path === "/api/auth/session") data = { username: "editor", demo: true };
+      else if (path.endsWith("/dashboard")) data = { total: 1, status_counts: {}, source_mode: "rss" };
+      else if (path === "/api/backend/cases") data = [item];
+      else if (path.endsWith("/cases/crop-ui")) data = item;
+      else if (path.endsWith("/operations")) data = { runs: [] };
+      else if (path.endsWith("/instagram-browser/config")) data = { enabled: false, celebrities: [], brands: [] };
+      else if (path.endsWith("/instagram-browser/posts")) data = { results: [] };
+      else if (path.endsWith("/instagram-browser/status")) data = { status: "not_run" };
+      else if (path.endsWith("/collage/layouts")) {
+        const payload = route.request().postDataJSON();
+        const photo = payload.photos[0];
+        const sideHeight = Math.round(1080 * photo.height / photo.width);
+        data = Object.fromEntries(["side_by_side", "balanced_grid", "hero_focus", "editorial_split"].map(layout => [layout, { width: 1080, height: layout === "side_by_side" ? sideHeight : 1350, cells: [[0, 0, 1080, layout === "side_by_side" ? sideHeight : 1350]] }]));
+      }
+      else if (path.endsWith("/collage/edit")) {
+        submitted = route.request().postDataJSON();
+        item.collage_editor = { ...item.collage_editor, ...submitted, revision: 2 };
+        data = { preview_url: "/crop.svg", bundle_url: "/api/bundle", asset_count: 1, canvas_format: submitted.canvas_format, layout_template: submitted.layout_template };
+      }
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify(data) });
+    });
+    await page.goto("/dashboard");
+    await page.getByRole("button", { name: "Edit collage & sources", exact: true }).click();
+    await page.getByRole("radio", { name: /Side by side/ }).click();
+    await expect(page.getByRole("radiogroup", { name: "Instagram canvas format" })).toHaveCount(0);
+    await expect(page.getByRole("img", { name: "Current collage layout preview", exact: true })).toBeVisible();
+    await expect(page.getByText(/With one photo, the fixed layouts have the same arrangement/)).toBeVisible();
+    await page.getByRole("button", { name: "Resize or crop Current photo", exact: true }).click();
+    await page.getByRole("button", { name: "Manual crop", exact: true }).click();
+    for (const name of [/Crop width/, /Crop height/]) {
+      const slider = page.getByRole("slider", { name });
+      await slider.focus();
+      await slider.press("End");
+      for (let step = 0; step < 50; step++) await slider.press("ArrowLeft");
+    }
+    await page.getByRole("button", { name: /Rotate 90/ }).click();
+    await page.getByRole("button", { name: "Mirror horizontally", exact: true }).click();
+    const preview = page.locator(".manual-crop-result canvas");
+    await expect.poll(() => preview.evaluate((canvas: HTMLCanvasElement) => [canvas.width, canvas.height])).toEqual([200, 300]);
+    await expect(page.getByRole("img", { name: "Current collage layout preview", exact: true })).toHaveCSS("aspect-ratio", "1080 / 1620");
+    expect(await preview.evaluate((canvas: HTMLCanvasElement) => Array.from(canvas.getContext("2d")!.getImageData(50, 50, 1, 1).data))).toEqual([0, 255, 0, 255]);
+    for (const layout of [/Balanced grid/, /Hero focus/, /Editorial split/]) {
+      await page.getByRole("radio", { name: layout }).click();
+      await expect(page.getByText("Final panel preview", { exact: true })).toBeVisible();
+      await expect.poll(() => preview.evaluate((canvas: HTMLCanvasElement) => [canvas.width, canvas.height])).toEqual([480, 600]);
+      const cells = page.getByRole("img", { name: "Current collage layout preview", exact: true }).locator(".live-layout-cell");
+      await expect(cells.first()).toHaveClass(/fill-photo/);
+      expect(await preview.evaluate((canvas: HTMLCanvasElement) => Array.from(canvas.getContext("2d")!.getImageData(0, 0, 1, 1).data))).toEqual([0, 255, 0, 255]);
+    }
+    await page.getByRole("radio", { name: /Side by side/ }).click();
+    await expect.poll(() => preview.evaluate((canvas: HTMLCanvasElement) => [canvas.width, canvas.height])).toEqual([200, 300]);
+    await page.getByRole("button", { name: "Save & re-render", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Your outfit collage is ready." })).toBeVisible();
+    expect(submitted.layout_template).toBe("side_by_side");
+    expect(submitted.panel_options[panel.id]).toMatchObject({ crop_mode: "crop", crop_rect: { x: .25, y: .25, width: .5, height: .5 }, rotation_degrees: 90, flip_horizontal: true });
+    await page.locator(".collage-result-modal").getByRole("button", { name: "Close", exact: true }).click();
+    await page.getByRole("button", { name: "Edit collage & sources", exact: true }).click();
+    await expect(page.getByRole("radio", { name: /Side by side/ })).toHaveAttribute("aria-checked", "true");
+    await page.getByRole("button", { name: "Resize or crop Current photo", exact: true }).click();
+    await expect.poll(() => preview.evaluate((canvas: HTMLCanvasElement) => [canvas.width, canvas.height])).toEqual([200, 300]);
+    expect(errors).toEqual([]);
+  });
+}
+
+for (const scenario of [{ width: 1440, connected: true }, { width: 390, connected: true }, { width: 1440, connected: false }]) {
+  test(`WordPress draft action is discoverable at ${scenario.width}, connected=${scenario.connected}`, async ({ page }) => {
+    await page.setViewportSize({ width: scenario.width, height: 900 });
+    const now = new Date().toISOString();
+    const item = {
+      id: "wp-ui-case", title: "A reviewed look", celebrity: "Alia Bhatt", designer: "Designer",
+      event_name: "Appearance", status: "needs_review", match_type: "same_outfit", confidence: 0.9,
+      risk_level: "low", base_image: "/fixture.svg", demo_data: false, source_type: "instagram",
+      fashion_category: "women", created_at: now, published_at: now, candidates: [], assets: [], extraction: {},
+      permalink: "https://www.instagram.com/p/fixture/",
+      latest_collage: { id: "collage-1", preview_url: "/fixture.svg", bundle_url: "/api/cases/wp-ui-case/bundle" },
+      collage_editor: { revision: 1, panels: [], default_ids: [], canvas_format: "instagram_portrait", layout_template: "balanced_grid" },
+    };
+    let story = { title: "A reviewed look", body: "The completed story.", alt_text: "A fashion collage", credits: "Photo credit", category_ids: [], tag_ids: [], revision: 1, reviewed_collage_id: "collage-1", sync_state: "local" };
+    let sends = 0;
+    await page.route("**/media/**", route => route.fulfill({ contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="500"><rect width="400" height="500" fill="#805465"/></svg>' }));
+    await page.route("**/api/**", async route => {
+      const path = new URL(route.request().url()).pathname;
+      let data: unknown = {};
+      if (path === "/api/auth/session") data = { username: "editor", demo: !scenario.connected };
+      else if (path.endsWith("/dashboard")) data = { total: 1, status_counts: {}, source_mode: "rss" };
+      else if (path === "/api/backend/cases") data = [item];
+      else if (path === "/api/backend/cases/wp-ui-case") data = item;
+      else if (path.endsWith("/operations")) data = { runs: [] };
+      else if (path.endsWith("/instagram-browser/config")) data = { enabled: false, celebrities: [], brands: [] };
+      else if (path.endsWith("/instagram-browser/posts")) data = { results: [] };
+      else if (path.endsWith("/instagram-browser/status")) data = { status: "not_run" };
+      else if (path.endsWith("/wordpress/connection")) data = { connected: scenario.connected, enabled: true };
+      else if (path.endsWith("/wordpress/taxonomy")) data = { categories: [], tags: [] };
+      else if (path.endsWith("/story")) data = story;
+      else if (path.endsWith("/wordpress") && route.request().method() === "POST") {
+        sends++;
+        story = { ...story, sync_state: "draft_created" };
+        data = { edit_url: "https://example.com/wp-admin/post.php?post=123&action=edit" };
+      }
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify(data) });
+    });
+    await page.goto("/dashboard");
+    const action = page.getByRole("region", { name: "Editorial tools" }).getByRole("button", { name: "Send WordPress draft", exact: true });
+    await expect(action).toBeEnabled();
+    await action.click();
+    const dialog = page.locator(".edition-dialog");
+    await expect(dialog.getByLabel("Headline", { exact: true })).toHaveValue(story.title);
+    await expect(dialog.getByRole("progressbar")).toHaveCount(0);
+    expect(sends).toBe(0);
+    const send = dialog.getByRole("button", { name: /Send WordPress draft/ });
+    if (!scenario.connected) {
+      await expect(send).toBeDisabled();
+      await expect(dialog.getByText("Connect by signing in with your WordPress Application Password.")).toBeVisible();
+      return;
+    }
+    await expect(send).toBeEnabled();
+    await page.getByRole("button", { name: "Close editorial workspace" }).click();
+    await page.getByRole("button", { name: "View collage", exact: true }).click();
+    const preview = page.locator(".collage-result-modal");
+    const previewAction = preview.getByRole("button", { name: "Send WordPress draft", exact: true });
+    await expect(previewAction).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await previewAction.click();
+    await expect(preview).toHaveCount(0);
+    await expect(send).toBeEnabled();
+    expect(sends).toBe(0);
+    await send.click();
+    await expect(dialog.getByRole("link", { name: /Open draft in WordPress/ })).toHaveAttribute("href", /post=123/);
+    expect(sends).toBe(1);
   });
 }

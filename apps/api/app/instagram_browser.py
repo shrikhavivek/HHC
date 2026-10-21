@@ -1,4 +1,5 @@
 import hashlib
+import json
 import re
 import time
 import uuid
@@ -11,7 +12,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator, model_v
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .automation import KNOWN_CELEBRITY_HANDLES, render_draft_collage
+from .automation import render_draft_collage
 from .config import get_settings
 from .database import get_db
 from .editor_uploads import MAX_UPLOAD_BYTES, UploadValidationError, store_editor_image
@@ -28,7 +29,7 @@ RUNNER_KEY = "instagram-browser:runner"
 
 
 def active_run(value):
-    return value.get("status") in {"queued", "running"} and time.time() - value.get("heartbeat", 0) < 180
+    return value.get("status") in {"queued", "awaiting_login", "running"} and time.time() - value.get("heartbeat", 0) < 180
 
 
 class Celebrity(BaseModel):
@@ -86,7 +87,8 @@ def default_config():
         ("Zara", ["zara"]), ("H&M", ["hm"]), ("Swarovski", ["swarovski"]),
         ("Tiffany & Co", ["tiffanyandco"]), ("Bulgari", ["bulgari"]),
     ]
-    return BrowserConfig(celebrities=[Celebrity(name=name, handle=handle) for handle, name in KNOWN_CELEBRITY_HANDLES.items()], brands=[Brand(name=name, handles=handles) for name, handles in labels])
+    celebrities = json.loads(Path(__file__).with_name("instagram_watchlist.json").read_text(encoding="utf-8"))
+    return BrowserConfig(celebrities=celebrities, brands=[Brand(name=name, handles=handles) for name, handles in labels])
 
 
 def config_for(db):
@@ -165,8 +167,8 @@ def status(db: Session = Depends(get_db)):
     state = db.get(ServiceState, RUN_KEY)
     value = dict(state.value) if state else {"status": "not_run"}
     runner = db.get(ServiceState, RUNNER_KEY)
-    value["runner_online"] = bool(runner and time.time() - runner.value.get("heartbeat", 0) < 180) or (value.get("status") == "running" and active_run(value))
-    if value.get("status") in {"queued", "running"} and not active_run(value):
+    value["runner_online"] = bool(runner and time.time() - runner.value.get("heartbeat", 0) < 180) or (value.get("status") in {"awaiting_login", "running"} and active_run(value))
+    if value.get("status") in {"queued", "awaiting_login", "running"} and not active_run(value):
         value.update(status="interrupted", detail="The local collector stopped responding. Check that this computer and the app are running, then scan again.")
     return value
 
@@ -182,10 +184,18 @@ def queue_scan(db: Session = Depends(get_db)):
     runner = db.get(ServiceState, RUNNER_KEY)
     if not runner or time.time() - runner.value.get("heartbeat", 0) >= 180:
         raise HTTPException(503, "The local Instagram collector is offline. Start the HHC Instagram Requests task in Windows Task Scheduler, with Docker running and this Windows user signed in.")
-    state.value = {"run_id": str(uuid.uuid4()), "status": "queued", "heartbeat": time.time(), "updated_at": datetime.now(timezone.utc).isoformat(), "accounts_checked": 0, "posts_checked": 0, "imported": 0, "detail": "Waiting for the local browser. Collection starts within one minute.", "exclusions": {}}
+    state.value = {"run_id": str(uuid.uuid4()), "status": "queued", "heartbeat": time.time(), "updated_at": datetime.now(timezone.utc).isoformat(), "accounts_checked": 0, "posts_checked": 0, "imported": 0, "detail": "Opening Instagram in a separate window. Sign in there; the scan will start automatically.", "exclusions": {}}
     db.add(AuditEvent(entity_type="instagram_browser", entity_id=state.value["run_id"], action="scan_requested", actor=current_actor(), detail={"scope": "all_enabled_accounts"}))
     db.commit()
     return state.value
+
+
+@router.post("/heartbeat")
+def runner_heartbeat(db: Session = Depends(get_db)):
+    runner = locked_state(db, RUNNER_KEY, {})
+    runner.value = {"heartbeat": time.time()}
+    db.commit()
+    return {"ok": True}
 
 
 @router.post("/claim")
@@ -200,9 +210,6 @@ def claim_scan(db: Session = Depends(get_db)):
             claimed = state.value
         else:
             state.value = {**state.value, "status": "paused", "detail": "Intake was paused before collection started."}
-        if state.value.get("kind") == "hashtag_search":
-            saved = locked_state(db, "instagram-hashtags:" + state.value["case_id"], {})
-            saved.value = state.value
     db.commit()
     return {"run": claimed}
 
@@ -226,7 +233,7 @@ def recent_posts(db: Session = Depends(get_db)):
 
 class RunReport(BaseModel):
     run_id: str = Field(pattern=r"^[a-zA-Z0-9-]{1,64}$")
-    status: str = Field(pattern=r"^(running|completed|partial|blocked|failed|paused)$")
+    status: str = Field(pattern=r"^(awaiting_login|running|completed|partial|blocked|failed|paused|cancelled)$")
     accounts_checked: int = Field(default=0, ge=0, le=200)
     posts_checked: int = Field(default=0, ge=0, le=2400)
     imported: int = Field(default=0, ge=0, le=2400)

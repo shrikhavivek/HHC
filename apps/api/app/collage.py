@@ -21,7 +21,7 @@ INSTAGRAM_CANVAS_FORMATS = {
     "instagram_portrait": {"width": 1080, "height": 1350, "label": "Instagram portrait", "ratio": "4:5"},
     "instagram_landscape": {"width": 1080, "height": 566, "label": "Instagram landscape", "ratio": "1.91:1"},
 }
-COLLAGE_LAYOUT_TEMPLATES = {"balanced_grid", "hero_focus", "editorial_split"}
+COLLAGE_LAYOUT_TEMPLATES = {"balanced_grid", "hero_focus", "editorial_split", "side_by_side"}
 
 def _font(size: int, bold: bool = False):
     path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
@@ -263,6 +263,23 @@ def _instagram_geometry(
     if layout_template == "editorial_split":
         return _editorial_split_geometry(count, width, height, weights, canvas_format)
     return _balanced_grid_geometry(count, width, height, weights, canvas_format)
+
+
+def side_by_side_geometry(sizes, export_scale=1):
+    scale = export_scale if export_scale in {1, 2, 3} else 1
+    ratios = [width / height for width, height in sizes]
+    total_ratio = sum(ratios)
+    height = max(1, min(4320 * scale, round(1080 * scale / total_ratio)))
+    width = max(len(sizes), round(height * total_ratio))
+    cells = []
+    cumulative = 0.0
+    left = 0
+    for index, ratio in enumerate(ratios):
+        cumulative += ratio
+        right = max(left + 1, min(width - len(sizes) + index + 1, round(width * cumulative / total_ratio)))
+        cells.append((left, 0, right - left, height))
+        left = right
+    return width, height, cells
 
 
 def _bounded_float(value, default: float, lower: float, upper: float) -> float:
@@ -555,7 +572,18 @@ def render_bundle(
             render_options[str(asset["id"])] = render_option
             source.close()
         width_scales = [normalized_options[str(asset["id"])]["width_scale"] for asset in assets]
-        if normalized_format:
+        if normalized_template == "side_by_side":
+            # A shared height preserves each edited photo's proportions. The
+            # canvas follows the photos instead of cropping them into fixed cells.
+            canvas_width, canvas_height, cells = side_by_side_geometry([image.size for image in opened], export_scale)
+            canvas = Image.new("RGB", (canvas_width, canvas_height))
+            for index, image in enumerate(opened):
+                x, y, width, height = cells[index]
+                panel = image.resize((width, canvas_height), Image.Resampling.LANCZOS)
+                panel = caption_panel(panel, normalized_options[str(assets[index]["id"])]["caption"])
+                canvas.paste(panel, (x, y))
+                panel.close()
+        elif normalized_format:
             format_spec = INSTAGRAM_CANVAS_FORMATS[normalized_format]
             scale = export_scale if export_scale in {1, 2, 3} else 1
             canvas_width = int(format_spec["width"]) * scale
@@ -597,10 +625,7 @@ def render_bundle(
                     option = render_options[str(assets[image_index]["id"])]
                     if option["crop_mode"] == "crop" and option["crop_rect"]:
                         selection = _crop_rectangle(source, option["crop_rect"])
-                        if option["width_scale"] != 1.0:
-                            panel = _fit_panel(selection, (width, height), {**option, "focal_x": 0.5, "focal_y": 0.5})
-                        else:
-                            panel = selection.resize((width, height), Image.Resampling.LANCZOS)
+                        panel = _fit_panel(selection, (width, height), {**option, "focal_x": 0.5, "focal_y": 0.5})
                         selection.close()
                     elif option["crop_mode"] == "crop":
                         panel = _crop_panel(source, (width, height), option)
@@ -639,12 +664,12 @@ def render_bundle(
         "outfit": {"celebrity": case.celebrity, "designer": case.designer, "event": case.event_name, "date": case.event_date},
         "assets": assets,
         "panel_count": len(assets),
-        "layout": normalized_template if normalized_format else "edge_to_edge_justified",
+        "layout": normalized_template if normalized_format or normalized_template == "side_by_side" else "edge_to_edge_justified",
         "canvas_format": normalized_format or "source_ratio",
         "canvas_width": canvas.width,
         "export_scale": export_scale,
         "canvas_height": canvas.height,
-        "canvas_ratio": INSTAGRAM_CANVAS_FORMATS[normalized_format]["ratio"] if normalized_format else "source-driven",
+        "canvas_ratio": f"{canvas.width}:{canvas.height}" if normalized_template == "side_by_side" else INSTAGRAM_CANVAS_FORMATS[normalized_format]["ratio"] if normalized_format else "source-driven",
         "editor_customized": panel_ids is not None,
         "panel_options": normalized_options,
         "collage_adjustments": normalized_collage_adjustments,

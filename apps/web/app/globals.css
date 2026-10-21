@@ -781,7 +781,7 @@ button:disabled { opacity: .52; cursor: not-allowed !important; transform: none 
 .collage-result-frame img { max-width: 100%; max-height: calc(100vh - 260px); display: block; object-fit: contain; box-shadow: 0 25px 65px rgba(0,0,0,.34); }
 .collage-result-modal > footer { min-height: 70px; flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 14px 25px; border-top: 1px solid rgba(35,24,27,.12); }
 .collage-result-modal > footer > span { display: inline-flex; align-items: center; gap: 7px; color: #34725f; font-size: 7px; font-weight: 700; }
-.collage-result-modal > footer > div { display: flex; gap: 8px; }
+.collage-result-modal > footer > div { display: flex; flex-wrap: wrap; gap: 8px; }
 .collage-result-modal footer a { text-decoration: none; }
 
 @media (max-width: 1260px) {

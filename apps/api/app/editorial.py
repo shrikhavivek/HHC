@@ -215,6 +215,6 @@ def restore(case_id: str, payload: RestoreInput, db: Session = Depends(get_db)):
         data["watermark"] = {"enabled": False}
     if manifest.get("canvas_format") in {"instagram_portrait", "instagram_landscape"}:
         data["canvas_format"] = manifest["canvas_format"]
-    if manifest.get("layout") in {"balanced_grid", "hero_focus", "editorial_split"}:
+    if manifest.get("layout") in {"balanced_grid", "hero_focus", "editorial_split", "side_by_side"}:
         data["layout_template"] = manifest["layout"]
     return edit_collage(case_id, CollageEditInput(**data), db)

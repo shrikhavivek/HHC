@@ -11,7 +11,11 @@ type Post = { id: string; celebrity: string; base_image: string; collage_image?:
 async function request(path: string, body?: object) {
   const response = await fetch(`/api/backend/instagram-browser/${path}`, { method: body ? "POST" : "GET", headers: body ? { "Content-Type": "application/json" } : undefined, body: body ? JSON.stringify(body) : undefined });
   const data = await response.json();
-  if (!response.ok) throw new Error(typeof data.detail === "string" ? data.detail : "The Instagram service could not complete this request.");
+  if (!response.ok) {
+    if (response.status === 401) throw new Error("Your session expired. Sign in again.");
+    if (response.status === 503) throw new Error("Instagram scanning is unavailable right now. Please try again shortly.");
+    throw new Error(typeof data.detail === "string" ? data.detail : "Something went wrong. Please try again.");
+  }
   return data;
 }
 
@@ -43,7 +47,7 @@ export function InstagramWatchlist({ onOpen }: { onOpen: (caseId: string) => Pro
       try {
         const [status, feed] = await Promise.all([request("status"), request("posts")]);
         if (!cancelled) { setRun(status); setPosts(feed.results); setLoaded(true); setConnectionError(""); }
-      } catch { if (!cancelled) setConnectionError("Live updates unavailable. Check that the local app is running; displayed results may be out of date."); }
+      } catch { if (!cancelled) setConnectionError("Unable to update the feed. Please refresh the page."); }
       finally { refreshing = false; }
     };
     void refresh();
@@ -73,43 +77,48 @@ export function InstagramWatchlist({ onOpen }: { onOpen: (caseId: string) => Pro
         return { name, handles: split(handles).map(handle => handle.replace(/^@/, "")), aliases: split(aliases) };
       });
       const saved = await request("config", { enabled: config.enabled, celebrities, brands: labels });
-      setConfig(saved); setMessage("Watchlist saved. Scan now uses all enabled accounts in this saved list.");
+      setConfig(saved); setMessage("Watchlist saved.");
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not save the watchlist."); }
     finally { setBusy(false); }
   }
 
-  const active = !connectionError && !!run && ["queued", "running"].includes(run.status) && Date.now() / 1000 - (run.heartbeat || 0) < 180;
+  const active = !connectionError && !!run && ["queued", "awaiting_login", "running"].includes(run.status) && Date.now() / 1000 - (run.heartbeat || 0) < 180;
+  const awaitingLogin = active && run?.status === "awaiting_login";
   const accounts = config?.celebrities.filter(person => person.enabled).length || 0;
   const visible = posts.filter(post => `${post.celebrity} ${post.brands.join(" ")}`.toLowerCase().includes(filter.trim().toLowerCase()));
   const date = (value: string) => new Date(value).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
   const preview = (post: Post) => { const path = post.collage_image || post.base_image; return path.startsWith("/") ? `/media${path}` : path; };
-  const statusLabel = !run ? "Connecting to local collector" : active ? run.status === "queued" ? "Scan queued — opening browser shortly" : `Scanning ${run.current_account || "Instagram"}` : run.dry_run || run.detail?.startsWith("Read-only trial.") ? "Previous check was a preview — run a live scan" : ({ completed: "Scan complete", partial: "Scan incomplete — some posts could not be checked", blocked: "Instagram needs your attention", failed: "Scan could not finish", paused: "Intake paused", not_run: "Ready for your first scan", interrupted: "Scan interrupted" }[run.status] || "Scan interrupted");
+  const statusLabel = !run ? "" : awaitingLogin ? "Waiting for Instagram sign-in" : active ? run.status === "queued" ? "Opening Instagram…" : `Scanning ${run.current_account || "Instagram"}` : run.dry_run ? "Preview complete" : ({ completed: "Scan complete", partial: "Some accounts could not be checked", blocked: "Instagram needs your attention", failed: "Scan stopped", paused: "Scanning paused", cancelled: "Scan cancelled", not_run: "", interrupted: "Scan stopped" }[run.status] || "Scan stopped");
+  const statusHint = awaitingLogin ? "Complete sign-in or verification in the Instagram window. Your scan starts automatically; keep that window open."
+    : active ? run?.status === "running" ? "Keep the Instagram window open while we collect photos." : "Sign in when the Instagram window opens."
+    : run?.dry_run ? "Choose Scan now to collect photos."
+    : run?.status === "blocked" ? "Complete any checks in Instagram, then try Scan now again."
+    : run?.status === "paused" ? "Enable scanning in Watchlist settings to continue."
+    : run?.status === "cancelled" && run.detail?.includes("timed out") ? "Sign-in timed out. Choose Scan now to try again."
+    : ["interrupted", "failed", "running", "awaiting_login", "queued"].includes(run?.status || "") ? "Choose Scan now to start again." : "";
 
   return <section className="web-discovery instagram-watchlist" aria-label="Instagram discovery">
-    <header className="instagram-heading"><div><small>YOUR DAILY FASHION FEED</small><h2>Discover Instagram posts</h2><p>Photo posts with brand or designer credits, collected from your saved celebrity watchlist.</p></div><span className="web-week-badge">Today &amp; yesterday</span></header>
+    <header className="instagram-heading"><div><h2>Discover Instagram posts</h2><p>Recent photos with brand or designer credits.</p></div><span className="web-week-badge">Today &amp; yesterday</span></header>
     <div className="web-discovery-content">
-      <div className="instagram-scan-bar"><div><strong>{accounts} watched accounts</strong><p>Daily at 9:00 AM IST · Signed-in Instagram browser · No public-web search</p></div><button type="button" className="primary" onClick={() => void scan()} disabled={scanning || active || busy || !config}>{scanning ? "Requesting scan…" : active ? "Scan in progress…" : "Scan now"}</button></div>
-      <div className="instagram-progress" role="status" aria-live="polite"><strong>{statusLabel}</strong>{run?.updated_at && <span>{run.accounts_checked || 0}/{run.accounts_total || accounts} accounts checked · {run.posts_checked || 0} posts checked · {run.imported || 0} imported · Updated {date(run.updated_at)} IST</span>}{active && <p>Qualifying photos appear below automatically. You can keep using the editor.</p>}</div>
-      {run && !run.runner_online && !active && <p className="web-discovery-note">Local collector offline. Keep this computer awake and signed in with Docker running. Windows Task Scheduler → HHC Instagram Requests → Run.</p>}
-      {run?.status === "blocked" && <p className="web-discovery-error">Open the HHC Instagram browser and complete Instagram’s sign-in or verification yourself, close that window, then choose Scan now. No access restrictions are bypassed.</p>}
+      <div className="instagram-scan-bar"><strong>{accounts} watched accounts</strong><button type="button" className="primary" onClick={() => void scan()} disabled={scanning || active || busy || !config}>{scanning || run?.status === "queued" && active ? "Opening Instagram…" : awaitingLogin ? "Waiting for sign-in…" : active ? "Scan in progress…" : "Scan now"}</button></div>
+      {statusLabel && !error && !connectionError && <div className="instagram-progress" role="status" aria-live="polite"><strong>{statusLabel}</strong>{active && run?.status === "running" && <span>{run.accounts_checked || 0} of {run.accounts_total || accounts} accounts checked</span>}{statusHint && <p>{statusHint}</p>}</div>}
+      {run && !run.runner_online && !active && !error && !connectionError && <p className="web-discovery-note">Instagram scanning is currently unavailable.</p>}
       {(error || connectionError) && <p role="alert" className="web-discovery-error">{error || connectionError}</p>}
       {message && <p role="status">{message}</p>}
-      <div className="web-results-heading"><strong>Collected Instagram photos · {posts.length}</strong><span>Publication dates in Asia/Kolkata · Reels excluded</span></div>
+      {!!posts.length && <div className="web-results-heading"><strong>Collected photos · {posts.length}</strong></div>}
       {!!posts.length && <label className="instagram-filter">Filter collected photos<input aria-label="Filter collected photos" placeholder="Celebrity or brand" value={filter} onChange={event => setFilter(event.target.value)}/></label>}
-      {!loaded ? <p>Loading collected photos…</p> : !posts.length ? <div className="instagram-empty"><strong>{active ? "Checking the watchlist for eligible photos…" : "No qualifying photos collected for today or yesterday yet."}</strong><p>{active ? "Only dated photo posts with a recognized brand or designer will appear here." : "Choose Scan now to check all enabled accounts and prepare editable drafts. Older posts and reels are not included."}</p></div> : !visible.length ? <p>No collected photos match that celebrity or brand.</p> : <div className="web-results-grid">{visible.map(post => <article className="web-result instagram-photo" key={post.id}>
+      {!loaded ? <p>Loading photos…</p> : !posts.length ? !active && <div className="instagram-empty"><strong>No recent photos yet.</strong>{!statusHint && <p>Choose Scan now to open Instagram and collect photos.</p>}</div> : !visible.length ? <p>No photos match that celebrity or brand.</p> : <div className="web-results-grid">{visible.map(post => <article className="web-result instagram-photo" key={post.id}>
         <img src={preview(post)} alt={`${post.celebrity} — Instagram collage preview`} loading="lazy"/>
-        <div className="web-result-meta"><time dateTime={post.published_at}>Published {date(post.published_at)} IST</time></div><h3>{post.celebrity}</h3><p>Mentioned or tagged: {post.brands.join(", ")}</p><strong>{post.photo_count || 1} {(post.photo_count || 1) === 1 ? "photo" : "photos"} collected · {post.carousel_complete ? "Carousel checked" : "Gallery may be incomplete"}</strong><small>Draft ready · Verify outfit attribution and image rights</small><a href={post.permalink} target="_blank" rel="noreferrer">View Instagram post ↗</a><button type="button" className="primary" onClick={() => void onOpen(post.id).catch(() => setError("Could not open the draft. Please try again."))}>Open editable draft</button>
+        <div className="web-result-meta"><time dateTime={post.published_at}>{date(post.published_at)}</time></div><h3>{post.celebrity}</h3><p>{post.brands.join(", ")}</p><strong>{post.photo_count || 1} {(post.photo_count || 1) === 1 ? "photo" : "photos"}</strong>{!post.carousel_complete && <small>Some photos may be missing.</small>}<a href={post.permalink} target="_blank" rel="noreferrer">View on Instagram ↗</a><button type="button" className="primary" onClick={() => void onOpen(post.id).catch(() => setError("Could not open the draft. Please try again."))}>Open draft</button>
       </article>)}</div>}
-      <details className="web-exclusions instagram-settings"><summary>Scan details &amp; skipped posts</summary><p>{run?.detail || "No completed scan yet."}</p><ul>{Object.entries(run?.exclusions || {}).map(([reason, count]) => <li key={reason}>{reason.replaceAll("_", " ")}: {count}</li>)}</ul><p>Coverage is limited to the saved watchlist, not every Bollywood account. Each scan checks up to 12 post links per account and captures photo slides from the same carousel (up to 20 slides). Video slides are skipped; incomplete galleries are labelled.</p></details>
-      <details className="instagram-settings"><summary>Watchlist settings</summary><p>Save changes before scanning. Recognized designer or brand mentions qualify; photographer, stylist and friend tags alone do not.</p>{config && <form onSubmit={event => { event.preventDefault(); void save(); }}>
-        <label className="instagram-enable"><input type="checkbox" checked={config.enabled} disabled={busy} onChange={event => setConfig({ ...config, enabled: event.target.checked })}/>Enable daily Instagram intake</label>
+      <details className="instagram-settings"><summary>Watchlist settings</summary>{config && <form onSubmit={event => { event.preventDefault(); void save(); }}>
+        <label className="instagram-enable"><input type="checkbox" checked={config.enabled} disabled={busy} onChange={event => setConfig({ ...config, enabled: event.target.checked })}/>Enable Instagram scanning</label>
         <label>Celebrity watchlist<textarea aria-label="Celebrity watchlist" value={people} disabled={busy} onChange={event => setPeople(event.target.value)} rows={8} spellCheck={false}/></label>
         <p className="web-discovery-note">One per line: Name | instagram_handle. Add | off to pause an account. Review handles before adding them.</p>
         <label>Recognized brands and designers<textarea aria-label="Recognized brands and designers" value={brands} disabled={busy} onChange={event => setBrands(event.target.value)} rows={7} spellCheck={false}/></label>
         <p className="web-discovery-note">One per line: Brand name | handles separated by commas | alternative names separated by commas.</p>
         <button type="submit" className="primary" disabled={busy}>{busy ? "Saving…" : "Save watchlist"}</button>
       </form>}</details>
-      <p className="web-discovery-note">Collection requires this Windows user signed in, the computer awake, Docker running and a valid Instagram session. Access restrictions stop the scan. Drafts require editorial review; nothing is auto-published.</p>
     </div>
   </section>;
 }

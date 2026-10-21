@@ -2,12 +2,13 @@
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { EditorialDesk } from "@/components/editorial-desk";
+import { EditorialDesk, type EditorialDeskHandle } from "@/components/editorial-desk";
 import { StudioBrand } from "@/components/studio-brand";
+import { CroppedPhotoPreview } from "@/components/cropped-photo-preview";
+import { CollageLayoutPreview, useLayoutPreviews } from "@/components/collage-layout-preview";
 import { MatchVerification } from "@/components/match-verification";
 import { OutfitContext } from "@/components/outfit-context";
 import { InstagramWatchlist } from "@/components/instagram-watchlist";
-import { InstagramHashtagResearch } from "@/components/instagram-hashtag-research";
 import { useUndoHistory } from "@/lib/use-undo-history";
 
 type WorkspaceView = "today" | "women" | "men" | "both" | "pending" | "reviewed";
@@ -113,7 +114,7 @@ type PanelLayoutOption = {
   adjustments?: ImageAdjustments;
 };
 type CanvasFormat = "instagram_portrait" | "instagram_landscape";
-type LayoutTemplate = "balanced_grid" | "hero_focus" | "editorial_split";
+type LayoutTemplate = "balanced_grid" | "hero_focus" | "editorial_split" | "side_by_side";
 type ImageAdjustments = {
   brightness: number;
   contrast: number;
@@ -178,6 +179,7 @@ const CANVAS_FORMATS: { id: CanvasFormat; label: string; detail: string }[] = [
   { id: "instagram_landscape", label: "Landscape", detail: "1080 × 566 · 1.91:1" },
 ];
 const LAYOUT_TEMPLATES: { id: LayoutTemplate; label: string; detail: string }[] = [
+  { id: "side_by_side", label: "Side by side", detail: "Full crops, no borders or gaps" },
   { id: "balanced_grid", label: "Balanced grid", detail: "Equal editorial rhythm" },
   { id: "hero_focus", label: "Hero focus", detail: "Lead image with supporting views" },
   { id: "editorial_split", label: "Editorial split", detail: "Asymmetric magazine treatment" },
@@ -316,10 +318,11 @@ function StatusPill({ status }: { status: string }) {
   return <span className={`status status-${status}`}><i />{pretty(status)}</span>;
 }
 
-function ManualCropEditor({ image, label, option, onChange }: {
+function ManualCropEditor({ image, label, option, onChange, frameAspect }: {
   image: string;
   label: string;
   option: PanelLayoutOption;
+  frameAspect?: number;
   onChange: (patch: Partial<PanelLayoutOption>) => void;
 }) {
   const [sourceAspect, setSourceAspect] = useState(.75);
@@ -494,6 +497,7 @@ function ManualCropEditor({ image, label, option, onChange }: {
       <label><span>Crop height <b>{Math.round(rect.height * 100)}%</b></span><input type="range" min="5" max="100" step="1" value={Math.round(rect.height * 100)} onChange={event => setCropHeight(Number(event.target.value) / 100)}/><small>Short</small><small>Full height</small></label>
     </div>
     <p className="crop-keyboard-note">Move the selected box directly, resize any of its eight handles, or use arrow keys for precise positioning. Hold Shift for larger steps.</p>
+    <div className="manual-crop-result"><strong>{frameAspect ? "Final panel preview" : "Your cropped photo"}</strong><CroppedPhotoPreview image={image} label={`Cropped preview of ${label}`} option={option} frameAspect={frameAspect}/></div>
   </div>;
 }
 
@@ -545,29 +549,36 @@ function CollageAdjustmentEditor({ baseImage, adjustments, onChange }: {
   </details>;
 }
 
-function CollageLayoutPicker({ panels, canvasFormat, layoutTemplate, onFormatChange, onTemplateChange }: {
+function CollageLayoutPicker({ panels, panelOptions, previews, canvasFormat, layoutTemplate, onFormatChange, onTemplateChange }: {
   panels: CollagePanel[];
+  panelOptions: Record<string, PanelLayoutOption>;
+  previews: ReturnType<typeof useLayoutPreviews>;
   canvasFormat: CanvasFormat;
   layoutTemplate: LayoutTemplate;
   onFormatChange: (format: CanvasFormat) => void;
   onTemplateChange: (template: LayoutTemplate) => void;
 }) {
-  const previewPanels = panels.slice(0, 4);
+  const { layouts, error, loading } = previews;
   return <section className="collage-layout-picker">
-    <div className="layout-picker-heading"><div><small>Instagram edition</small><h3>Format &amp; collage style</h3><p>Choose the final Instagram canvas, then select one of three editorial arrangements.</p></div><span>{canvasFormat === "instagram_portrait" ? "4:5" : "1.91:1"}</span></div>
-    <div className="canvas-format-options" role="radiogroup" aria-label="Instagram canvas format">
+    <div className="layout-picker-heading"><div><small>Collage layout</small><h3>Format &amp; collage style</h3><p>{layoutTemplate === "side_by_side" ? "Images sit next to each other at the same height. The canvas follows your crops, with no borders or gaps." : "Every layout fills edge to edge. The live preview shows the final framing."}</p></div><span>{layoutTemplate === "side_by_side" ? "Auto height" : canvasFormat === "instagram_portrait" ? "4:5" : "1.91:1"}</span></div>
+    {layoutTemplate !== "side_by_side" && <div className="canvas-format-options" role="radiogroup" aria-label="Instagram canvas format">
       {CANVAS_FORMATS.map(format => <button key={format.id} type="button" role="radio" aria-checked={canvasFormat === format.id} className={canvasFormat === format.id ? "active" : ""} onClick={() => onFormatChange(format.id)}>
         <i className={format.id === "instagram_portrait" ? "portrait" : "landscape"}/><span><strong>{format.label}</strong><small>{format.detail}</small></span><Icon name={canvasFormat === format.id ? "check" : "image"} size={14}/>
       </button>)}
-    </div>
+    </div>}
     <div className="layout-template-options" role="radiogroup" aria-label="Collage layout template">
       {LAYOUT_TEMPLATES.map(template => <button key={template.id} type="button" role="radio" aria-checked={layoutTemplate === template.id} className={layoutTemplate === template.id ? "active" : ""} onClick={() => onTemplateChange(template.id)}>
-        <span className={`layout-template-preview ${canvasFormat === "instagram_portrait" ? "is-portrait" : "is-landscape"} template-${template.id}`} aria-hidden>
-          {previewPanels.map(panel => <i key={panel.id}><img src={asset(panel.image_path)} alt=""/></i>)}
+        <span className="layout-option-preview" aria-hidden>
+          {layouts[template.id] ? <CollageLayoutPreview panels={panels} options={panelOptions} geometry={layouts[template.id]} layout={template.id} label={template.label}/> : <span>Preparing preview…</span>}
         </span>
         <span><strong>{template.label}</strong><small>{template.detail}</small></span>
         <em>{layoutTemplate === template.id ? "Selected" : "Choose"}</em>
       </button>)}
+    </div>
+    {panels.length === 1 && <p className="edition-hint">With one photo, the fixed layouts have the same arrangement. Add another photo to see the differences.</p>}
+    <div className="selected-layout-preview" aria-live="polite">
+      <strong>{LAYOUT_TEMPLATES.find(template => template.id === layoutTemplate)?.label} preview</strong>
+      {loading ? <p>Updating preview…</p> : error ? <p role="status">{error}</p> : layouts[layoutTemplate] && <CollageLayoutPreview panels={panels} options={panelOptions} geometry={layouts[layoutTemplate]} layout={layoutTemplate} label="Current collage layout preview"/>}
     </div>
   </section>;
 }
@@ -833,6 +844,7 @@ export default function DashboardPage() {
   const [editionCode, setEditionCode] = useState("Daily / —");
   const [candidateIndex, setCandidateIndex] = useState(0);
   const [collageResult, setCollageResult] = useState<CollageResult | null>(null);
+  const editorialDesk = useRef<EditorialDeskHandle>(null);
   const [showCollageEditor, setShowCollageEditor] = useState(false);
   const [editorMaximized, setEditorMaximized] = useState(false);
   const [editorPanelIds, setEditorPanelIds] = useState<string[]>([]);
@@ -846,11 +858,10 @@ export default function DashboardPage() {
   const [editorExportScale, setEditorExportScale] = useState(1);
   const [uploadBusy, setUploadBusy] = useState(false);
   const [uploadSourceUrl, setUploadSourceUrl] = useState("");
-  const [uploadFromResearch, setUploadFromResearch] = useState(false);
   const [watermarkBusy, setWatermarkBusy] = useState(false);
   const [categoryBusy, setCategoryBusy] = useState(false);
   const [profile, setProfile] = useState<{ username: string; demo: boolean } | null>(null);
-  useEffect(() => { setUploadSourceUrl(""); setUploadFromResearch(false); }, [selected?.id]);
+  useEffect(() => { setUploadSourceUrl(""); }, [selected?.id]);
   const caseRequest = useRef(0);
   const editorSnapshot = { panelIds: editorPanelIds, options: editorPanelOptions, format: editorCanvasFormat, layout: editorLayoutTemplate, adjustments: editorCollageAdjustments, watermark: editorWatermark, scale: editorExportScale };
   const editorOriginal = useRef("");
@@ -1041,6 +1052,7 @@ export default function DashboardPage() {
   const editorCatalogById = new Map(editorCatalog.map(item => [item.id, item]));
   const editorSelectedPanels = editorPanelIds.map(id => editorCatalogById.get(id)).filter((item): item is CollagePanel => Boolean(item));
   const editorAvailablePanels = editorCatalog.filter(item => !editorPanelIds.includes(item.id));
+  const layoutPreviews = useLayoutPreviews(showCollageEditor ? editorSelectedPanels : [], editorPanelOptions, editorCanvasFormat);
   const selectedCurrentPanelCount = editorSelectedPanels.filter(item => ["current_primary", "current_angle"].includes(item.role)).length;
 
   function switchView(next: WorkspaceView) {
@@ -1196,7 +1208,7 @@ export default function DashboardPage() {
         canvasFormat: data.canvas_format,
         layoutTemplate: data.layout_template,
       });
-      setToast(`${editorCanvasFormat === "instagram_portrait" ? "Portrait" : "Landscape"} ${LAYOUT_TEMPLATES.find(item => item.id === editorLayoutTemplate)?.label.toLowerCase()} collage updated with ${data.asset_count} source-backed panel${data.asset_count === 1 ? "" : "s"}${data.watermark?.enabled ? " and the HHC watermark" : ""}.`);
+      setToast(`${editorLayoutTemplate === "side_by_side" ? "" : editorCanvasFormat === "instagram_portrait" ? "Portrait" : "Landscape"} ${LAYOUT_TEMPLATES.find(item => item.id === editorLayoutTemplate)?.label.toLowerCase()} collage updated with ${data.asset_count} source-backed panel${data.asset_count === 1 ? "" : "s"}${data.watermark?.enabled ? " and the HHC watermark" : ""}.`);
       await openCase(caseId);
     } catch { setToast("The collage could not be saved. Your edits are still open; please retry."); }
     finally { setEditorBusy(false); }
@@ -1361,7 +1373,7 @@ export default function DashboardPage() {
         <article className="guardrail"><div className="guardrail-orbit"><Icon name="shield" size={18}/></div><span>Editorial promise</span><strong>Human taste. Machine speed.</strong><small>Nothing publishes without your final word.</small></article>
       </section>
 
-      <EditorialDesk selected={selected} onRefresh={() => { if (showCollageEditor || showIntake || decisionMode) return; if (selected) void openCase(selected.id); void load(); }}/>
+      <EditorialDesk ref={editorialDesk} selected={selected} onRefresh={() => { if (showCollageEditor || showIntake || decisionMode) return; if (selected) void openCase(selected.id); void load(); }}/>
       {selected?.demo_data && <p className="edition-message">Demonstration case and placeholder photographs. Connect a source in Sources &amp; schedule to prepare real editorial images.</p>}
       <InstagramWatchlist onOpen={async caseId => { setWorkspaceView("today"); setFilter("all"); setSearch(""); await load(); await openCase(caseId); }}/>
       <div className="workbench-heading"><div><span className="workbench-kicker">THE EDITORIAL DESK</span><h2>The working edit.</h2></div><p>Instagram &amp; Reddit: today &amp; yesterday · Websites: current week<span>Publication dates · Asia/Kolkata</span></p></div>
@@ -1386,11 +1398,10 @@ export default function DashboardPage() {
             <dl className="look-facts"><div><dt>Designer</dt><dd>{selected.designer}</dd></div><div><dt>{selected.published_date ? "Post published" : "Appearance"}</dt><dd>{selected.published_date || selected.event_date || "Date to verify"}{selected.web_discovered && <span>Source publication date</span>}</dd></div><div><dt>Discovery signal</dt><dd>{Math.round(selected.confidence * 100)}%<span>Not editorial verification</span></dd></div></dl>
 
             <OutfitContext key={selected.id} selected={selected} onSaved={() => void openCase(selected.id)}/>
-            <InstagramHashtagResearch key={`${selected.id}:${selected.context_revision || 0}`} caseId={selected.id} onAddSource={url => { setUploadSourceUrl(url); setUploadFromResearch(true); openCollageEditor(); }}/>
             {candidate && <MatchVerification key={candidate.id} candidateId={candidate.id} currentDate={selected.event_date} earlierDate={candidate.event_date} onVerified={() => void openCase(selected.id)}/>}
             {selected.latest_collage && <section className="automatic-draft-card">
               <div className="automatic-draft-image"><img src={asset(selected.latest_collage.preview_url)} alt={`Automatic collage for ${selected.celebrity}`}/><span>Generated automatically</span></div>
-              <div className="automatic-draft-copy"><small>Today’s ready-to-review output</small><h3>Instagram collage complete</h3><p>Every usable source image is assembled into the selected Instagram format. Open the editor to switch between portrait and landscape or choose one of three collage arrangements.</p><div><span><Icon name="check" size={13}/>{automaticPanelCount} source panel{automaticPanelCount === 1 ? "" : "s"} in one image</span><span><Icon name="shield" size={13}/>Draft only — never auto-published</span></div><footer><button type="button" className="primary" onClick={() => setCollageResult({ previewUrl: asset(selected.latest_collage!.preview_url), bundleUrl: selected.latest_collage!.bundle_url.replace(/^\/api\//, "/api/backend/"), assetCount: automaticPanelCount, canvasFormat: selected.collage_editor.canvas_format, layoutTemplate: selected.collage_editor.layout_template })}><Icon name="eye"/>View collage</button><button type="button" className="ghost" onClick={openCollageEditor}><Icon name="edit"/>Edit collage &amp; sources</button><a className="ghost" href={selected.latest_collage.bundle_url.replace(/^\/api\//, "/api/backend/")} target="_blank" rel="noreferrer"><Icon name="download"/>Evidence bundle</a></footer></div>
+              <div className="automatic-draft-copy"><small>Today’s ready-to-review output</small><h3>Collage ready</h3><p>Open the editor to choose Side by side, adjust each crop, or use a fixed portrait or landscape layout.</p><div><span><Icon name="check" size={13}/>{automaticPanelCount} source panel{automaticPanelCount === 1 ? "" : "s"} in one image</span><span><Icon name="shield" size={13}/>Draft only — never auto-published</span></div><footer><button type="button" className="primary" onClick={() => setCollageResult({ previewUrl: asset(selected.latest_collage!.preview_url), bundleUrl: selected.latest_collage!.bundle_url.replace(/^\/api\//, "/api/backend/"), assetCount: automaticPanelCount, canvasFormat: selected.collage_editor.canvas_format, layoutTemplate: selected.collage_editor.layout_template })}><Icon name="eye"/>View collage</button><button type="button" className="ghost" onClick={openCollageEditor}><Icon name="edit"/>Edit collage &amp; sources</button><a className="ghost" href={selected.latest_collage.bundle_url.replace(/^\/api\//, "/api/backend/")} target="_blank" rel="noreferrer"><Icon name="download"/>Evidence bundle</a></footer></div>
             </section>}
 
             {!candidate && <>
@@ -1442,19 +1453,21 @@ export default function DashboardPage() {
 
     {showCollageEditor && selected && <div className={`modal-backdrop collage-editor-backdrop${editorMaximized ? " is-maximized" : ""}`} onMouseDown={closeCollageEditor}><section className={`collage-editor-modal${editorMaximized ? " is-maximized" : ""}`} role="dialog" aria-modal="true" aria-labelledby="collage-editor-title" onMouseDown={event => event.stopPropagation()}>
       <header><div><small>Collage workspace</small><h2 id="collage-editor-title">Edit this collage.</h2><p>Reorder, replace, resize, or crop each image, then review its fashion-archive history and source rights in the same panel.</p></div><div className="editor-window-actions"><button type="button" className="editor-size-toggle" onClick={() => setEditorMaximized(current => !current)} aria-pressed={editorMaximized} aria-label={editorMaximized ? "Restore collage editor size" : "Maximize collage editor"} title={editorMaximized ? "Restore current layout (Esc)" : "Expand editor to full screen"}><Icon name={editorMaximized ? "restore" : "maximize"} size={18}/><span>{editorMaximized ? "Restore" : "Full screen"}</span></button><button type="button" className="modal-close" onClick={closeCollageEditor} disabled={editorBusy} aria-label="Close collage editor"><Icon name="close"/></button></div></header>
-      <div className="collage-editor-summary"><span><b>{editorSelectedPanels.length}</b> selected panels</span><span><Icon name="image" size={13}/>{editorCanvasFormat === "instagram_portrait" ? "Instagram portrait · 4:5" : "Instagram landscape · 1.91:1"}</span><span>{LAYOUT_TEMPLATES.find(item => item.id === editorLayoutTemplate)?.label}</span><span>{editorWatermark?.enabled ? "HHC watermark ready" : "Watermark optional"}</span></div>
+      <div className="collage-editor-summary"><span><b>{editorSelectedPanels.length}</b> selected panels</span><span><Icon name="image" size={13}/>{editorLayoutTemplate === "side_by_side" ? "Auto height, no borders or gaps" : editorCanvasFormat === "instagram_portrait" ? "Instagram portrait · 4:5" : "Instagram landscape · 1.91:1"}</span><span>{LAYOUT_TEMPLATES.find(item => item.id === editorLayoutTemplate)?.label}</span><span>{editorWatermark?.enabled ? "HHC watermark ready" : "Watermark optional"}</span></div>
       <div className="studio-history-bar" inert={editorBusy}><button type="button" onClick={undoHistory.undo} disabled={!undoHistory.canUndo || editorBusy}>↶ Undo</button><button type="button" onClick={undoHistory.redo} disabled={!undoHistory.canRedo || editorBusy}>↷ Redo</button><span>{editorDirty ? "Unsaved changes" : "Saved version"} · Ctrl / ⌘ Z to undo</span></div>
       <div className="collage-editor-body" inert={editorBusy} tabIndex={0} role="region" aria-label="Collage editing workspace">
         <section className="selected-panel-list" tabIndex={0} aria-label="Selected collage photos"><div className="editor-section-heading"><div><small>Final image order</small><h3>Panels in collage</h3></div><button type="button" onClick={resetCollageLayout}>Reset automatic layout</button></div>
-          <CollageLayoutPicker panels={editorSelectedPanels} canvasFormat={editorCanvasFormat} layoutTemplate={editorLayoutTemplate} onFormatChange={setEditorCanvasFormat} onTemplateChange={setEditorLayoutTemplate}/>
+          <CollageLayoutPicker panels={editorSelectedPanels} panelOptions={editorPanelOptions} previews={layoutPreviews} canvasFormat={editorCanvasFormat} layoutTemplate={editorLayoutTemplate} onFormatChange={setEditorCanvasFormat} onTemplateChange={setEditorLayoutTemplate}/>
           <label className="panel-range"><span>Export resolution</span><select value={editorExportScale} onChange={event => setEditorExportScale(Number(event.target.value))}><option value={1}>Standard · 1080 px wide</option><option value={2}>High resolution · 2160 px wide</option><option value={3}>Large editorial · 3240 px wide</option></select><p className="edition-hint">Original photos are preserved. Larger exports cannot recover detail missing from a source image.</p></label>
           <div className="panel-sort-list">{editorSelectedPanels.map((panel, index) => {
             const requiredCurrent = ["current_primary", "current_angle"].includes(panel.role) && selectedCurrentPanelCount === 1;
             const option = panelOption(panel.id);
             const tuning = tuningPanelId === panel.id;
+            const cell = layoutPreviews.layouts[editorLayoutTemplate]?.cells[index];
+            const frameAspect = editorLayoutTemplate !== "side_by_side" && cell ? cell[2] / cell[3] : undefined;
             return <article className={`panel-sort-card ${tuning ? "is-tuning" : ""}`} key={panel.id} draggable={!tuning} onDragStart={event => event.dataTransfer.setData("text/plain", panel.id)} onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); const dragged = event.dataTransfer.getData("text/plain"); if (!editorPanelIds.includes(dragged) || dragged === panel.id) return; setEditorPanelIds(ids => { const next = ids.filter(id => id !== dragged); next.splice(next.indexOf(panel.id), 0, dragged); return next; }); }}>
               <span className="panel-order">{(index + 1).toString().padStart(2, "0")}</span>
-              <img src={asset(panel.image_path)} alt={panel.label} style={{ objectFit: option.crop_mode === "crop" ? "cover" : "contain", objectPosition: `${option.focal_x * 100}% ${option.focal_y * 100}%` }}/>
+              <CroppedPhotoPreview image={asset(panel.image_path)} label={panel.label} option={option} className="panel-photo-preview"/>
               <div><small>{pretty(panel.role)}</small><strong>{panel.person || panel.label}</strong><p>{panel.label} · Grade {panel.source_grade}</p></div>
               <div className="panel-controls">
                 <button type="button" className={tuning ? "active" : ""} onClick={() => setTuningPanelId(current => current === panel.id ? null : panel.id)} aria-label={`Resize or crop ${panel.label}`} aria-expanded={tuning} title="Resize or crop"><Icon name="tune" size={15}/></button>
@@ -1466,11 +1479,11 @@ export default function DashboardPage() {
                 <div className="studio-image-tools"><button type="button" onClick={() => updatePanelOption(panel.id, { rotation_degrees: (((option.rotation_degrees || 0) + 90) % 360) as 0 | 90 | 180 | 270 })}>Rotate 90° · {option.rotation_degrees || 0}°</button><button type="button" aria-pressed={Boolean(option.flip_horizontal)} onClick={() => updatePanelOption(panel.id, { flip_horizontal: !option.flip_horizontal })}>Mirror horizontally</button><button type="button" aria-pressed={Boolean(option.flip_vertical)} onClick={() => updatePanelOption(panel.id, { flip_vertical: !option.flip_vertical })}>Mirror vertically</button></div>
                 <label className="panel-range"><span>Photo caption / designer credit</span><input value={option.caption || ""} maxLength={160} placeholder="Name · Designer · Event" onChange={event => updatePanelOption(panel.id, { caption: event.target.value })}/></label>
                 <ImageAdjustmentControls value={option.adjustments || DEFAULT_IMAGE_ADJUSTMENTS} onChange={adjustments => updatePanelOption(panel.id, { adjustments })}/>
-                <p className="edition-hint">Photos fill each panel without gaps or blurred backgrounds. Optional captions appear over the photo. Use manual crop to select the area you want to keep.</p>
+                <p className="edition-hint">All layouts have no borders or gaps. Check the final panel preview before saving.</p>
                 <div className="panel-tuning-heading"><div><small>Image layout</small><strong>Resize &amp; crop</strong></div><button type="button" onClick={() => updatePanelOption(panel.id, DEFAULT_PANEL_OPTION)}>Reset image</button></div>
-                <label className="panel-range"><span>Panel width <b>{Math.round(option.width_scale * 100)}%</b></span><input type="range" min="65" max="175" step="5" value={Math.round(option.width_scale * 100)} onChange={event => updatePanelOption(panel.id, { width_scale: Number(event.target.value) / 100 })}/><small>Narrower</small><small>Wider</small></label>
-                <div className="crop-mode-control"><span>Image treatment</span><div><button type="button" className={option.crop_mode === "fit" ? "active" : ""} onClick={() => updatePanelOption(panel.id, { crop_mode: "fit", zoom: 1 })}>Fill panel</button><button type="button" className={option.crop_mode === "crop" ? "active" : ""} onClick={() => updatePanelOption(panel.id, { crop_mode: "crop", crop_rect: option.crop_rect || { ...DEFAULT_CROP_RECT } })}>Manual crop</button></div><p>{option.crop_mode === "fit" ? "The photo fills the panel edge to edge. Edges may be cropped to match your chosen layout." : "Select the area to keep. That selection fills the panel; its edges may be cropped to match the layout."}</p></div>
-                {option.crop_mode === "crop" && <ManualCropEditor image={asset(panel.image_path)} label={panel.label} option={option} onChange={patch => updatePanelOption(panel.id, patch)}/>} 
+                {editorLayoutTemplate !== "side_by_side" && <label className="panel-range"><span>Panel width <b>{Math.round(option.width_scale * 100)}%</b></span><input type="range" min="65" max="175" step="5" value={Math.round(option.width_scale * 100)} onChange={event => updatePanelOption(panel.id, { width_scale: Number(event.target.value) / 100 })}/><small>Narrower</small><small>Wider</small></label>}
+                <div className="crop-mode-control"><span>Image treatment</span><div><button type="button" className={option.crop_mode === "fit" ? "active" : ""} onClick={() => updatePanelOption(panel.id, { crop_mode: "fit", zoom: 1 })}>{editorLayoutTemplate === "side_by_side" ? "Full photo" : "Fill panel"}</button><button type="button" className={option.crop_mode === "crop" ? "active" : ""} onClick={() => updatePanelOption(panel.id, { crop_mode: "crop", crop_rect: option.crop_rect || { ...DEFAULT_CROP_RECT } })}>Manual crop</button></div><p>{editorLayoutTemplate === "side_by_side" ? "Your full photo or selected crop sits beside the other images without gaps or extra cropping." : option.crop_mode === "fit" ? "The photo fills the panel edge to edge. Edges may be cropped to match your chosen layout." : "Your selection fills this panel edge to edge. The final panel preview shows any trimming needed to fit."}</p></div>
+                {option.crop_mode === "crop" && <ManualCropEditor image={asset(panel.image_path)} label={panel.label} option={option} frameAspect={frameAspect} onChange={patch => updatePanelOption(panel.id, patch)}/>}
               </div>}
             </article>;
           })}</div>
@@ -1494,7 +1507,7 @@ export default function DashboardPage() {
             <summary><span><Icon name="upload" size={15}/><b>Upload your own image</b></span><small>JPEG, PNG or WebP · up to 20 MB</small></summary>
             <form onSubmit={uploadCollageImage}>
               <label className="upload-file"><span>Choose image</span><input name="image" type="file" accept="image/jpeg,image/png,image/webp" required disabled={uploadBusy}/></label>
-              <div className="upload-form-row"><label>Panel label<input name="label" defaultValue="Editor-supplied comparison" maxLength={180} required disabled={uploadBusy}/></label><label>Person/model<input name="person" placeholder={uploadFromResearch ? "Identify the wearer or model" : selected.celebrity} required={uploadFromResearch} maxLength={180} disabled={uploadBusy}/></label></div>
+              <div className="upload-form-row"><label>Panel label<input name="label" defaultValue="Editor-supplied comparison" maxLength={180} required disabled={uploadBusy}/></label><label>Person/model<input name="person" placeholder={selected.celebrity} maxLength={180} disabled={uploadBusy}/></label></div>
               <label>Original source URL <em>optional</em><input name="source_url" type="url" placeholder="https://…" value={uploadSourceUrl} onChange={event => setUploadSourceUrl(event.target.value)} disabled={uploadBusy}/></label>
               <label>Image credit<input name="credit" placeholder="Photographer, agency, publication or owner" maxLength={300} required disabled={uploadBusy}/></label>
               <label className="rights-confirm"><input name="rights_confirmed" type="checkbox" value="true" required disabled={uploadBusy}/><span>I confirm this image may be stored and used in an internal editorial draft. Publishing rights will still be reviewed.</span></label>
@@ -1507,7 +1520,7 @@ export default function DashboardPage() {
       <footer><div><Icon name="shield"/><span>This saves a new draft and audit entry. It does not publish to WordPress.</span></div><div><button type="button" className="ghost" onClick={closeCollageEditor} disabled={editorBusy}>Cancel</button><button type="button" className="download" onClick={() => void saveCollageEdit()} disabled={editorBusy || !editorPanelIds.length}><Icon name={editorBusy ? "refresh" : "image"}/>{editorBusy ? "Rendering…" : "Save & re-render"}</button></div></footer>
     </section></div>}
 
-    {collageResult && <div className="modal-backdrop collage-backdrop" onMouseDown={() => setCollageResult(null)}><section className="collage-result-modal" onMouseDown={event => event.stopPropagation()}><header><div><small>Render complete</small><h2>Your outfit collage is ready.</h2><p>{collageResult.assetCount} source-backed images{collageResult.canvasFormat ? ` · ${collageResult.canvasFormat === "instagram_portrait" ? "Instagram portrait" : "Instagram landscape"} · ${pretty(collageResult.layoutTemplate || "balanced_grid")}` : ""}, with saved crops, manifest and evidence bundle.</p></div><button type="button" className="modal-close" onClick={() => setCollageResult(null)} aria-label="Close"><Icon name="close"/></button></header><div className={`collage-result-frame ${collageResult.canvasFormat === "instagram_landscape" ? "is-landscape" : ""}`}><img src={collageResult.previewUrl} alt="Generated outfit collage preview"/></div><footer><span><Icon name="check"/>Saved layout applied · originals untouched</span><div><a className="ghost" href={collageResult.bundleUrl} target="_blank" rel="noreferrer"><Icon name="download"/>Evidence bundle</a><a className="download" href={collageResult.previewUrl} target="_blank" rel="noreferrer"><Icon name="external"/>Open full size</a></div></footer></section></div>}
+    {collageResult && <div className="modal-backdrop collage-backdrop" onMouseDown={() => setCollageResult(null)}><section className="collage-result-modal" onMouseDown={event => event.stopPropagation()}><header><div><small>Render complete</small><h2>Your outfit collage is ready.</h2><p>{collageResult.assetCount} source-backed images{collageResult.layoutTemplate === "side_by_side" ? ", Side by side" : collageResult.canvasFormat ? ` · ${collageResult.canvasFormat === "instagram_portrait" ? "Instagram portrait" : "Instagram landscape"} · ${pretty(collageResult.layoutTemplate || "balanced_grid")}` : ""}, with saved crops, manifest and evidence bundle.</p></div><button type="button" className="modal-close" onClick={() => setCollageResult(null)} aria-label="Close"><Icon name="close"/></button></header><div className={`collage-result-frame ${collageResult.canvasFormat === "instagram_landscape" ? "is-landscape" : ""}`}><img src={collageResult.previewUrl} alt="Generated outfit collage preview"/></div><footer><span><Icon name="check"/>Saved layout applied · originals untouched</span><div><a className="ghost" href={collageResult.bundleUrl} target="_blank" rel="noreferrer"><Icon name="download"/>Evidence bundle</a><a className="download" href={collageResult.previewUrl} target="_blank" rel="noreferrer"><Icon name="external"/>Open full size</a><button type="button" className="primary" disabled={!selected?.latest_collage} onClick={() => { setCollageResult(null); editorialDesk.current?.openStory(); }}>Send WordPress draft</button></div></footer></section></div>}
     {toast && <div className="toast" role="status" aria-live="polite"><Icon name="spark"/><span>{toast}</span></div>}
   </main>;
 }

@@ -7,7 +7,8 @@ def prepare_photo(image, option, adjustments):
     render_option = dict(option)
     if option.get("crop_mode") == "crop" and option.get("crop_rect"):
         result = _crop_rectangle(image, option["crop_rect"])
-        render_option.update(crop_rect=None, crop_mode="fit", zoom=1)
+        # Fill fixed cells using only the selected area, centered like the preview.
+        render_option.update(crop_rect=None, crop_mode="fit", zoom=1, focal_x=0.5, focal_y=0.5)
     else:
         result = image.copy()
     rotation = option.get("rotation_degrees", 0)

@@ -163,22 +163,28 @@ def test_complete_reddit_gallery_is_not_truncated():
     ("instagram_landscape", "balanced_grid"),
     ("instagram_landscape", "hero_focus"),
     ("instagram_landscape", "editorial_split"),
+    ("instagram_portrait", "side_by_side"),
+    ("instagram_landscape", "side_by_side"),
 ])
-def test_export_has_no_separators_between_any_photos(tmp_path, canvas_format, layout_template):
+@pytest.mark.parametrize("count", [1, 2, 3, 4, 5, 6, 9])
+def test_export_has_no_separators_between_any_photos(tmp_path, canvas_format, layout_template, count):
     static_dir = tmp_path / "static"
     static_dir.mkdir()
-    colors = [(180, 30, 50), (30, 140, 110), (40, 90, 180), (180, 130, 40), (130, 50, 160)]
+    colors = [(30 + index * 20, 140 - index * 10, 50 + index * 15) for index in range(count)]
     for index, color in enumerate(colors, start=1):
         with Image.new("RGB", (210 + index * 13, 320 + index * 19), color) as photo:
             photo.save(static_dir / f"look-{index}.png")
     case = _case([
         _asset("current_angle", suffix=str(index), image_path=f"/static/look-{index}.png")
-        for index in range(2, 6)
+        for index in range(2, count + 1)
     ])
     decision = SimpleNamespace(id="seamless", decision="automation_draft", reason="Edge-to-edge regression")
+    panels = build_render_assets(case, [])
+    options = {panel["id"]: {"crop_mode": "crop", "crop_rect": {"x": .2, "y": .1, "width": .4, "height": .6}, "rotation_degrees": 90 if index % 2 else 0, "width_scale": .65 if index % 2 else 1.75} for index, panel in enumerate(panels)}
     _, manifest_path, _ = render_bundle(
         str(tmp_path / "output"), str(static_dir), case, [], decision,
         canvas_format=canvas_format, layout_template=layout_template,
+        panel_options=options, export_scale=2 if count == 2 else 1,
     )
     with Image.open(Path(manifest_path).with_name("collage.png")) as collage:
         pixel_colors = collage.getcolors(maxcolors=len(colors))
@@ -362,6 +368,49 @@ def test_manual_crop_rectangle_keeps_only_the_selected_source_area(tmp_path):
         assert collage.size == (1200, 2000)
         assert collage.getpixel((collage.width // 2, collage.height // 2)) == (0, 0, 255)
         assert collage.getpixel((20, collage.height // 2)) == (0, 0, 255)
+
+
+@pytest.mark.parametrize("layout", ["side_by_side"])
+@pytest.mark.parametrize("rotation", [0, 90])
+def test_manual_crop_preserves_all_selected_edges_in_final_layout(tmp_path, layout, rotation):
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    # A second cover crop would remove one of these selected edge bands.
+    with Image.new("RGB", (600, 600), "magenta") as image:
+        image.paste("white", (100, 100, 300, 500))
+        image.paste("red", (100, 100, 300, 130))
+        image.paste("blue", (100, 470, 300, 500))
+        image.paste("lime", (100, 130, 130, 470))
+        image.paste("yellow", (270, 130, 300, 470))
+        image.save(static_dir / "look-1.png")
+    with Image.new("RGB", (400, 400), "cyan") as image:
+        image.save(static_dir / "look-3.png")
+    angle = _asset("current_angle")
+    _, manifest_path, _ = render_bundle(
+        str(tmp_path / "output"), str(static_dir), _case([angle]), [],
+        SimpleNamespace(id="crop-check", decision="editor_draft", reason="Preserve crop"),
+        canvas_format="instagram_landscape", layout_template=layout,
+        panel_ids=["current-primary", angle["id"]],
+        panel_options={"current-primary": {
+            "crop_mode": "crop", "crop_rect": {"x": 1/6, "y": 1/6, "width": 1/3, "height": 2/3},
+            "rotation_degrees": rotation, "flip_horizontal": True, "width_scale": 0.65,
+        }},
+    )
+    manifest = json.loads(Path(manifest_path).read_text())
+    with Image.open(Path(manifest_path).parent / "collage.png") as image:
+        colors = dict((color, count) for count, color in image.getcolors(image.width * image.height))
+        for color in [(255, 0, 0), (0, 0, 255), (0, 255, 0), (255, 255, 0)]:
+            assert colors.get(color, 0) > 100, "A manually selected edge was cropped away"
+        assert (255, 0, 255) not in colors, "Excluded source pixels reappeared"
+        if layout == "side_by_side":
+            expected_height = 360 if rotation else 720
+            assert image.size == (1080, expected_height)
+            assert (24, 24, 24) not in colors, "Side-by-side must not add padding"
+            split = 720 if rotation else 360
+            assert image.getpixel((split, 0)) == (0, 255, 255)
+            assert image.getpixel((image.width - 1, image.height - 1)) == (0, 255, 255)
+            assert manifest["canvas_ratio"] == f"1080:{expected_height}"
+    assert manifest["layout"] == layout
 
 
 def test_watermark_transform_is_rendered_and_recorded_without_changing_base_preview(tmp_path):

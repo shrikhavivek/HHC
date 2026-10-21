@@ -124,17 +124,31 @@ progress and new photos refresh automatically every five seconds. It does not us
 public search or require a post URL. A name/brand filter searches collected photos.
 Watchlist and brand configuration are collapsed under **Watchlist settings**.
 
-The panel manages an editable starter list of 16
-celebrity accounts and a brand/designer registry. This is not a complete directory
-of Bollywood, and configured handles should be reviewed. Up to 200 accounts can be
-configured. An arbitrary @mention (stylist, photographer, friend) does not qualify:
+**Scan now** opens Instagram in the dedicated Edge window on this computer.
+If sign-in is needed, the dashboard shows **Waiting for Instagram sign-in**.
+Sign in and complete any verification yourself in that window; collection starts
+automatically after signed-in navigation is visible. Keep the window open during
+collection. Existing signed-in sessions proceed directly. The sign-in wait expires
+after 15 minutes, closing the window cancels the scan, and pausing intake stops
+the wait. Access restrictions stop collection. No password is entered by the app.
+
+The panel manages an editable starter list of 121 celebrity accounts, covering
+leading Bollywood actors, veteran stars, newer actors and crossover performers,
+and a brand/designer registry. The default names and handles are maintained in
+`apps/api/app/instagram_watchlist.json`. Saved watchlists take precedence over
+these defaults, so existing installations keep their edits and paused accounts.
+Handles were reviewed against [actor](https://trendingpunjabi.com/otherLinks/instaStats/mostFollowedIndians?profession=actor)
+and [actress](https://trendingpunjabi.com/otherLinks/instaStats/mostFollowedIndians?profession=actress)
+directories and published Instagram credits in October 2026; they can change.
+This is not a complete directory of Bollywood. Up to 200 accounts can be
+configured. Larger lists take longer to scan. An arbitrary @mention (stylist, photographer, friend) does not qualify:
 the caption or readable on-photo tag must match a configured brand name, alias or
 exact handle. Unknown labels are excluded until added to the registry.
 
 Run `npm run instagram:daily` from `apps/web` for one local collection pass. For a
 non-importing trial: `npm run instagram:daily -- --dry-run --handle kritisanon`.
-The collector uses the separate Edge session created by `instagram:browser`;
-close that trial window before collection. Cookies stay under your Windows user
+The collector shares the separate Edge session used by `instagram:browser` and
+can open it for sign-in itself; close any trial window before collection. Cookies stay under your Windows user
 profile and never go to Docker or GitHub. The collector reads the existing local
 `.env` editor API key privately and only sends approved post metadata and photo
 captures to the loopback API. No Instagram password is stored in application config.
@@ -146,13 +160,17 @@ Install the daily **09:00 India-time** task from PowerShell:
 ```
 
 Task Scheduler entries: `HHC Instagram Daily` (09:00) and `HHC Instagram Requests`
-(checks for dashboard requests every minute). Re-run the installer after upgrading
-to add the request task. Start `HHC Instagram Requests` in Task Scheduler to connect
-immediately; otherwise its first check occurs within a minute. Polling only contacts
+(checks for dashboard requests every three seconds while idle). Re-run the installer
+after upgrading. To install and start only the Scan now launcher, leaving the daily
+task as configured, run `& .\apps\web\scripts\install-instagram-task.ps1 -RequestsOnly`.
+The requests task starts immediately and at Windows sign-in, with a minute trigger
+to recover if it exits. One console-free background process polls the local API;
+idle polling never starts a terminal or another process. Polling only contacts
 the local API; Instagram opens only for a queued or scheduled scan. Queued requests
 expire after three minutes offline rather than unexpectedly running hours later.
-Overlapping requests reuse the active scan. The UI reports an offline collector
-instead of claiming a scan has started. Both tasks use a hidden console launcher;
+Overlapping requests reuse the active scan, including while waiting for sign-in.
+Login waits send heartbeats so they remain active. The UI reports an offline collector
+instead of claiming a scan has started. Both tasks use a console-free Windows launcher;
 the Instagram browser itself remains visible for inspection.
 
 Windows timezone must be India
@@ -260,47 +278,6 @@ walls or rate limits. Unsupported or inaccessible accounts require an
 editor-selected source and permitted image upload. Videos are not converted into
 fabricated outfit photos. Live access cannot be verified without the client's
 Meta credentials and approvals.
-
-## Instagram outfit research
-
-Open a look and expand **Find similar looks on Instagram**. Suggestions use the
-recorded designer/maker and garment, colour, fabric or construction details from
-the source text. The source celebrity's name, name fragments and known Instagram
-handle are excluded, including from custom hashtags. Correct attribution first
-if the person or designer is unresolved.
-
-Click a hashtag to open Instagram directly, or select up to six hashtags and use
-**Search signed-in Instagram**. The existing local Instagram Requests task claims
-the search through `instagram:daily -- --queued`; it shares the same browser
-profile and permits only one intake/research run at a time. The collector checks
-up to eight photo-post links per hashtag with one scroll, returns at most 24
-research leads, and stops on access restrictions. It returns links and captions,
-without downloading photos or modifying the collage. Instagram may redirect tag
-pages or expose no readable posts; incomplete searches are reported.
-
-Selected hashtags stack as an **AND filter**: every selected hashtag must appear
-in the same post's caption. Matching is case-insensitive and uses exact hashtag
-boundaries; plain keywords or longer hashtags are not substitutes. Individual
-Instagram links preview one hashtag; the studio filters collected posts against
-the complete combination. It never broadens to partial matches when no post
-qualifies.
-
-Generated Google links combine every selected hashtag with
-`site:instagram.com/p/` and negative celebrity terms. They work without an app
-connection. **Get Google results here** uses the existing `SERPAPI_KEY` setting;
-it searches the combination, checks up to ten original post captions, and caches
-successful results for that combination for 15 minutes. Google snippets alone
-do not qualify: inaccessible captions and posts missing any selected hashtag
-are excluded. Garment identity and post dates still need review. Editing the
-combination hides previous results until a new search applies those filters.
-
-This research includes older posts and is separate from today's/yesterday's
-Instagram intake. Celebrity mentions and duplicate post links are filtered, but
-unlabelled reposts can still appear. Open the original post to compare the actual
-garment. **Add a credited photo** opens the collage upload panel with the source
-URL filled in; supply an authorized image, person and credit through the normal
-editor workflow. No search result is automatically treated as a confirmed clone.
-Changing outfit context hides old search results and requires a new search.
 
 ## Daily editions
 

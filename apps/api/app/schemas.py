@@ -5,6 +5,17 @@ from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
 DecisionType = Literal["approved", "rejected", "similar_not_same", "needs_more_research"]
 
 
+class LayoutPhotoSize(BaseModel):
+    width: int = Field(ge=1, le=100000)
+    height: int = Field(ge=1, le=100000)
+    width_scale: float = Field(default=1, ge=0.65, le=1.75)
+
+
+class LayoutPreviewInput(BaseModel):
+    photos: list[LayoutPhotoSize] = Field(min_length=1, max_length=40)
+    canvas_format: Literal["instagram_portrait", "instagram_landscape"] = "instagram_portrait"
+
+
 class ManualIntake(BaseModel):
     reddit_url: HttpUrl
     title: str = Field(min_length=4, max_length=500)
@@ -103,7 +114,7 @@ class CollageEditInput(BaseModel):
     panel_ids: list[str] = Field(min_length=1, max_length=24)
     panel_options: dict[str, PanelLayoutOption] = Field(default_factory=dict)
     canvas_format: Literal["instagram_portrait", "instagram_landscape"] = "instagram_portrait"
-    layout_template: Literal["balanced_grid", "hero_focus", "editorial_split"] = "balanced_grid"
+    layout_template: Literal["balanced_grid", "hero_focus", "editorial_split", "side_by_side"] = "balanced_grid"
     collage_adjustments: ImageAdjustments = Field(default_factory=ImageAdjustments)
     watermark: WatermarkLayout | None = None
     editor_id: str = Field(default="editor@atelier", min_length=2, max_length=120)

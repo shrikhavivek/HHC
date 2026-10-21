@@ -1,5 +1,5 @@
 "use client";
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { FormEvent, Ref, useEffect, useImperativeHandle, useRef, useState } from "react";
 
 type Story = { title: string; body: string; alt_text: string; credits: string; category_ids: number[]; tag_ids: number[]; revision: number; reviewed_collage_id: string | null; wordpress_post_id?: number; sync_state: string };
 type Selected = { id: string; celebrity: string; designer: string; title: string; latest_collage?: { id: string; preview_url: string } | null; collage_editor: { revision?: number } };
@@ -17,7 +17,9 @@ export async function editorialRequest<T>(path: string, body?: unknown): Promise
 function photo(path: string) { return "/media" + path; }
 function readable(value: string) { return value.replaceAll("_", " "); }
 
-export function EditorialDesk({ selected, onRefresh }: { selected: Selected | null; onRefresh: () => void }) {
+export type EditorialDeskHandle = { openStory: () => void };
+
+export function EditorialDesk({ selected, onRefresh, ref }: { selected: Selected | null; onRefresh: () => void; ref?: Ref<EditorialDeskHandle> }) {
   const [tab, setTab] = useState<"story" | "history" | "connections" | null>(null);
   const [story, setStory] = useState<Story | null>(null);
   const [history, setHistory] = useState<History | null>(null);
@@ -59,6 +61,7 @@ export function EditorialDesk({ selected, onRefresh }: { selected: Selected | nu
       }
     } catch (error) { setMessage((error as Error).message); } finally { setBusy(false); }
   }
+  useImperativeHandle(ref, () => ({ openStory: () => { void open("story"); } }));
   useEffect(() => {
     function update(data: Operations) {
       setOperations(data);
@@ -122,6 +125,7 @@ export function EditorialDesk({ selected, onRefresh }: { selected: Selected | nu
       <div className="edition-command-actions">
         <button type="button" onClick={() => void open("connections")}><span className={operations?.worker_online ? "live-dot" : "idle-dot"}/>{latest?.status === "running" ? "Refreshing edition" : "Sources & schedule"}</button>
         <button type="button" disabled={!selected?.latest_collage} onClick={() => void open("history")}>Version history</button>
+        <button type="button" className="edition-primary" disabled={!selected?.latest_collage} onClick={() => void open("story")} title={selected?.latest_collage ? "Review the story and send a draft to WordPress" : "Select a look with a saved collage first"}>Send WordPress draft</button>
         <button type="button" className="edition-primary" disabled={!selected} onClick={() => void open("story")}>Write story <span aria-hidden>↗</span></button>
       </div>
     </section>

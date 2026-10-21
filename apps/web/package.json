@@ -10,7 +10,7 @@
     "test:e2e": "playwright test",
     "instagram:browser": "node scripts/instagram-browser.mjs",
     "instagram:daily": "node scripts/instagram-daily.mjs",
-    "test:instagram": "node --test scripts/instagram-daily-rules.test.mjs scripts/instagram-hashtag-rules.test.mjs"
+    "test:instagram": "node --test scripts/instagram-daily-rules.test.mjs scripts/instagram-requests.test.mjs"
   },
   "dependencies": {
     "next": "^16.0.0",

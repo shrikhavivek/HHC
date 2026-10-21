@@ -29,7 +29,8 @@ from .automation import (
     research_case_automation,
     run_daily_automation,
 )
-from .collage import ensure_demo_images, render_bundle
+from .collage import ensure_demo_images, render_bundle, side_by_side_geometry, _instagram_geometry, INSTAGRAM_CANVAS_FORMATS, COLLAGE_LAYOUT_TEMPLATES
+from .schemas import LayoutPreviewInput
 from .config import get_settings
 from .database import Base, SessionLocal, engine, get_db
 from .editor_uploads import MAX_UPLOAD_BYTES, MAX_WATERMARK_UPLOAD_BYTES, UploadValidationError, store_editor_image, store_watermark_image
@@ -50,7 +51,6 @@ from .editorial import router as editorial_router
 from .wordpress import router as wordpress_router
 from .worker import router as worker_router
 from .instagram_browser import router as instagram_browser_router
-from .instagram_hashtags import router as instagram_hashtags_router
 
 
 settings = get_settings()
@@ -140,7 +140,7 @@ def case_json(case: Case, detail=False):
             "default_ids": defaults,
             "selected_ids": selected or defaults,
             "canvas_format": edit.get("canvas_format") if edit.get("canvas_format") in {"instagram_portrait", "instagram_landscape"} else "instagram_portrait",
-            "layout_template": edit.get("layout_template") if edit.get("layout_template") in {"balanced_grid", "hero_focus", "editorial_split"} else "balanced_grid",
+            "layout_template": edit.get("layout_template") if edit.get("layout_template") in {"balanced_grid", "hero_focus", "editorial_split", "side_by_side"} else "balanced_grid",
             "panel_options": {
                 str(panel_id): value
                 for panel_id, value in saved_options.items()
@@ -222,7 +222,6 @@ app.include_router(editorial_router)
 app.include_router(wordpress_router)
 app.include_router(worker_router)
 app.include_router(instagram_browser_router)
-app.include_router(instagram_hashtags_router)
 
 
 @app.get("/health")
@@ -487,7 +486,7 @@ def create_collage(case_id: str, payload: CollageInput, db: Session = Depends(ge
     saved_collage_adjustments = edit.get("collage_adjustments") if isinstance(edit.get("collage_adjustments"), dict) else None
     saved_watermark = edit.get("watermark") if isinstance(edit.get("watermark"), dict) else None
     saved_canvas_format = edit.get("canvas_format") if edit.get("canvas_format") in {"instagram_portrait", "instagram_landscape"} else "instagram_portrait"
-    saved_layout_template = edit.get("layout_template") if edit.get("layout_template") in {"balanced_grid", "hero_focus", "editorial_split"} else "balanced_grid"
+    saved_layout_template = edit.get("layout_template") if edit.get("layout_template") in {"balanced_grid", "hero_focus", "editorial_split", "side_by_side"} else "balanced_grid"
     render_assets = build_render_assets(case, approved_candidates, panel_ids=saved_panel_ids)
     if len(render_assets) < 2:
         raise HTTPException(422, "The outfit needs another approved historical, current-angle, or official designer image")
@@ -686,6 +685,21 @@ async def upload_collage_watermark(
         (Path(settings.media_dir) / image_path.removeprefix("/media-files/")).unlink(missing_ok=True)
         raise
     return {"case_id": case.id, "asset": watermark_asset, "watermark": watermark}
+
+
+@app.post("/api/collage/layouts", dependencies=[Depends(require_editor)])
+def collage_layout_previews(payload: LayoutPreviewInput):
+    """Read-only layout geometry, shared with the final renderer."""
+    spec = INSTAGRAM_CANVAS_FORMATS[payload.canvas_format]
+    layouts = {}
+    for template in sorted(COLLAGE_LAYOUT_TEMPLATES):
+        width, height = spec["width"], spec["height"]
+        if template == "side_by_side":
+            width, height, cells = side_by_side_geometry([(p.width, p.height) for p in payload.photos])
+        else:
+            cells = _instagram_geometry(len(payload.photos), width, height, [p.width_scale for p in payload.photos], payload.canvas_format, template)
+        layouts[template] = {"width": width, "height": height, "cells": cells}
+    return layouts
 
 
 @app.post("/api/cases/{case_id}/collage/edit", dependencies=[Depends(require_editor)])

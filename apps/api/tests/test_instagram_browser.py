@@ -200,6 +200,19 @@ def test_scan_queue_auth_offline_idempotence_and_exclusive_claim(browser_client)
     assert client.get(root + "/status", headers=headers).json()["status"] == "completed"
 
 
+def test_launcher_heartbeat_authenticates_without_claiming_or_starting_a_scan(browser_client):
+    client, headers, _ = browser_client
+    root = "/api/instagram-browser"
+    assert client.post(root + "/heartbeat").status_code == 401
+    assert client.post(root + "/heartbeat", headers=headers).json() == {"ok": True}
+    assert client.get(root + "/status", headers=headers).json()["runner_online"]
+    queued = client.post(root + "/scan", headers=headers).json()
+    assert client.post(root + "/heartbeat", headers=headers).status_code == 200
+    status = client.get(root + "/status", headers=headers).json()
+    assert status["status"] == "queued"
+    assert status["run_id"] == queued["run_id"]
+
+
 def test_scan_queue_expiry_and_paused_intake(browser_client, monkeypatch):
     client, headers, _ = browser_client
     root = "/api/instagram-browser"
@@ -220,3 +233,31 @@ def test_scan_queue_expiry_and_paused_intake(browser_client, monkeypatch):
     config.update(enabled=True, celebrities=[])
     client.post(root + "/config", headers=headers, json=config)
     assert client.post(root + "/scan", headers=headers).status_code == 409
+
+
+def test_waiting_for_login_retains_the_run_and_expires_without_a_heartbeat(browser_client, monkeypatch):
+    client, headers, _ = browser_client
+    root = "/api/instagram-browser"
+    moment = [1000]
+    monkeypatch.setattr(browser.time, "time", lambda: moment[0])
+    client.post(root + "/claim", headers=headers)
+    queued = client.post(root + "/scan", headers=headers).json()
+    client.post(root + "/claim", headers=headers)
+    report = {"run_id": queued["run_id"], "status": "awaiting_login", "accounts_total": 121}
+    assert client.post(root + "/runs", headers=headers, json=report).status_code == 200
+    # The launcher's original heartbeat can age while the user completes login.
+    moment[0] += 200
+    client.post(root + "/runs", headers=headers, json=report)
+    status = client.get(root + "/status", headers=headers).json()
+    assert status["status"] == "awaiting_login"
+    assert status["runner_online"]
+    assert client.post(root + "/scan", headers=headers).json()["run_id"] == queued["run_id"]
+    assert client.post(root + "/claim", headers=headers).json() == {"run": None}
+    assert client.post(root + "/runs", headers=headers, json={**report, "run_id": "second"}).status_code == 409
+    assert client.post(root + "/runs", headers=headers, json={**report, "status": "running"}).status_code == 200
+    assert client.post(root + "/runs", headers=headers, json={**report, "status": "cancelled"}).status_code == 200
+    assert client.post(root + "/scan", headers=headers).json()["run_id"] != queued["run_id"]
+    claimed = client.post(root + "/claim", headers=headers).json()["run"]
+    client.post(root + "/runs", headers=headers, json={**report, "run_id": claimed["run_id"]})
+    moment[0] += 181
+    assert client.get(root + "/status", headers=headers).json()["status"] == "interrupted"
