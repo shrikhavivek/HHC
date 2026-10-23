@@ -9,6 +9,7 @@ from typing import Sequence
 from PIL import Image, ImageDraw, ImageEnhance, ImageFont, ImageOps
 
 from .assets import build_render_assets
+from .storage import get_storage
 from .photo_controls import prepare_photo, caption_panel
 
 
@@ -39,18 +40,36 @@ BUNDLE_FILES = ["collage.webp", "collage.png", "collage-source.webp", "manifest.
 
 def bundle_archive(bundle_path: str) -> bytes | None:
     """Zip a render's files for download; older renders may still have a stored ZIP."""
+    storage = get_storage()
     path = Path(bundle_path)
-    if path.is_file():
+    if storage.ensure(path):
         return path.read_bytes()
     version_dir = path.parent
-    if not (version_dir / "manifest.json").is_file():
+    if not storage.ensure(version_dir / "manifest.json"):
         return None
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
         for name in BUNDLE_FILES:
-            if (version_dir / name).is_file():
-                archive.write(version_dir / name, arcname=name)
+            if (name == "collage.png" and not (version_dir / name).is_file()) or not storage.ensure(version_dir / name):
+                continue
+            archive.write(version_dir / name, arcname=name)
     return output.getvalue()
+
+
+def bundle_download_url(bundle_path: str) -> str | None:
+    """Remote storage: keep the ZIP beside its render and hand out a signed link.
+
+    Serverless responses are capped at 4.5 MB, so large ZIPs cannot be streamed.
+    """
+    storage = get_storage()
+    path = Path(bundle_path)
+    if not storage.exists(path):
+        content = bundle_archive(bundle_path)
+        if content is None:
+            return None
+        path.write_bytes(content)
+        storage.saved(path)
+    return storage.signed_url(path)
 
 
 def render_urls(image_path: str, output_dir: str, case_id: str) -> dict:
@@ -58,8 +77,10 @@ def render_urls(image_path: str, output_dir: str, case_id: str) -> dict:
     version_dir = Path(image_path).resolve().parent
     relative_dir = version_dir.relative_to(Path(output_dir).resolve()).as_posix()
     preview_url = f"/outputs/{relative_dir}/collage.webp"
-    base_preview_url = f"/outputs/{relative_dir}/collage-base.webp" if (version_dir / "collage-base.webp").is_file() else preview_url
-    source_preview_url = f"/outputs/{relative_dir}/collage-source.webp" if (version_dir / "collage-source.webp").is_file() else base_preview_url
+    # Every render writes both previews; only old local renders may lack them.
+    present = (lambda name: True) if get_storage().remote else (lambda name: (version_dir / name).is_file())
+    base_preview_url = f"/outputs/{relative_dir}/collage-base.webp" if present("collage-base.webp") else preview_url
+    source_preview_url = f"/outputs/{relative_dir}/collage-source.webp" if present("collage-source.webp") else base_preview_url
     return {"preview_url": preview_url, "base_preview_url": base_preview_url, "source_preview_url": source_preview_url, "bundle_url": f"/api/cases/{case_id}/bundle"}
 
 
@@ -101,7 +122,7 @@ def _open_local_asset(static_dir: str, image_path: str, media_dir: str | None = 
     path = (root / relative).resolve()
     if root not in path.parents and path != root:
         raise FileNotFoundError(f"Collage asset path is not allowed: {image_path}")
-    if not path.is_file():
+    if not (path.is_file() if root == Path(static_dir).resolve() else get_storage().ensure(path)):
         raise FileNotFoundError(f"Collage asset has not been imported: {image_path}")
     return Image.open(path)
 
@@ -783,5 +804,7 @@ def render_bundle(
     canvas.close()
     # Each version lives only in its own folder; the evidence ZIP is built on
     # download (bundle_archive) instead of being stored with every render.
+    for written in bundle_dir.iterdir():
+        get_storage().saved(written)
     zip_path = bundle_dir / BUNDLE_NAME
     return str(webp_path), str(manifest_path), str(zip_path)

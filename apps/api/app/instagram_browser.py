@@ -16,6 +16,8 @@ from .automation import render_draft_collage
 from .config import get_settings
 from .database import get_db
 from .editor_uploads import MAX_UPLOAD_BYTES, UploadValidationError, store_editor_image
+from .storage import get_storage
+from .uploads import staged_uploads
 from .editorial import locked_state
 from .models import AuditEvent, Case, Collage, ServiceState, StoryDraft
 from .assets import build_render_assets
@@ -257,9 +259,12 @@ def report_run(payload: RunReport, db: Session = Depends(get_db)):
 
 
 @router.post("/posts")
-async def import_post(metadata: str = Form(..., max_length=15000), image: UploadFile = File(...), images: list[UploadFile] = File(default=[]), db: Session = Depends(get_db)):
+async def import_post(metadata: str = Form(..., max_length=15000), image: UploadFile | None = File(None), images: list[UploadFile] = File(default=[]),
+        upload_keys: str = Form(""), db: Session = Depends(get_db)):
     settings = get_settings()
-    uploads = [image, *images]
+    uploads = [image, *images] if image is not None else staged_uploads(upload_keys)
+    if not uploads:
+        raise HTTPException(422, "Send at least one photo")
     try:
         payload = BrowserPost.model_validate_json(metadata)
         person, matches = eligible_post(payload, config_for(db), settings.reddit_daily_timezone)
@@ -374,4 +379,4 @@ async def import_post(metadata: str = Form(..., max_length=15000), image: Upload
     finally:
         for path in paths:
             if path not in retained:
-                (Path(settings.media_dir) / "editor" / Path(path).name).unlink(missing_ok=True)
+                get_storage().delete(Path(settings.media_dir) / "editor" / Path(path).name)

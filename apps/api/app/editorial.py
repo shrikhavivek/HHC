@@ -12,6 +12,7 @@ from .config import get_settings
 from .database import get_db
 from .models import AuditEvent, Candidate, Case, Collage, EditorSession, ServiceState, StoryDraft
 from .security import current_actor
+from .storage import get_storage
 from .review import earlier_date
 
 router = APIRouter(prefix="/api")
@@ -190,7 +191,7 @@ def history(case_id: str, db: Session = Depends(get_db)):
     seen_paths = set()
     for item in collages:
         path = Path(item.image_path).resolve()
-        if root in path.parents and path.is_file() and path not in seen_paths:
+        if root in path.parents and path not in seen_paths and get_storage().exists(path):
             seen_paths.add(path)
             versions.append({"id": item.id, "created_at": item.created_at.isoformat(), "preview_url": "/outputs/" + path.relative_to(root).as_posix()})
     audit = db.scalars(select(AuditEvent).where(AuditEvent.entity_id == case_id).order_by(AuditEvent.id.desc()).limit(30)).all()
@@ -207,6 +208,8 @@ def restore(case_id: str, payload: RestoreInput, db: Session = Depends(get_db)):
     collage = db.get(Collage, payload.collage_id)
     if not collage or collage.case_id != case_id:
         raise HTTPException(404, "Revision not found")
+    if not get_storage().ensure(collage.manifest_path):
+        raise HTTPException(404, "This version's files are no longer stored")
     manifest = json.loads(Path(collage.manifest_path).read_text(encoding="utf-8"))
     data = {key: manifest[key] for key in ("panel_options", "collage_adjustments", "watermark", "export_scale") if key in manifest}
     data.update(panel_ids=[str(p["id"]) for p in manifest["assets"]], expected_revision=payload.expected_revision)

@@ -340,6 +340,10 @@ version folder; the evidence ZIP is built when it is downloaded. Set
 events and finished job runs older than that many days. WordPress sends,
 evidence checks, attribution corrections and purge records are always kept.
 
+## Hosting on Vercel + Supabase
+
+Experimental free-tier setup: see `docs/hosting-vercel-supabase.md`.
+
 ## WordPress
 
 Set `WORDPRESS_SITE_URL` to the site's HTTPS home URL and

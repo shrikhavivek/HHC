@@ -5,15 +5,15 @@ Once its edition closes, the case keeps a text archive entry (keywords, outfit
 signature and an image fingerprint) so it can still be matched. Approved or
 sent looks also keep one compressed reference image so they can be shown.
 """
-import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from PIL import Image, ImageOps
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session, selectinload
-from .automation import _local_media_path, _outfit_signature, _tokens, image_fingerprint
+from .automation import _local_media_path, _media_file, _outfit_signature, _tokens, image_fingerprint
 from .edition_window import in_current_edition
 from .models import ArchiveEntry, AuditEvent, Case, JobRun, StoryDraft
+from .storage import get_storage
 
 REFERENCE_DIR = "reference"
 REFERENCE_EDGE = 1080
@@ -61,6 +61,7 @@ def save_reference_image(db: Session, case: Case, image_path: str, media_dir: st
         image.thumbnail((REFERENCE_EDGE, REFERENCE_EDGE), Image.Resampling.LANCZOS)
         image.save(target, "WEBP", quality=80, method=6)
         image.close()
+        get_storage().saved(target)
     except (OSError, ValueError, Image.DecompressionBombError):
         return None
     entry = record_archive_entry(db, case, media_dir)
@@ -144,14 +145,15 @@ def purge_closed_editions(db: Session, settings, *, now: datetime | None = None)
         if not settings.archive_purge_enabled:
             continue
         removed = 0
+        storage = get_storage()
         for image_path in _case_media(case) - retained:
-            path = _local_media_path(image_path, settings.media_dir)
-            if path:
-                path.unlink(missing_ok=True)
+            path = _media_file(image_path, settings.media_dir)
+            if path and (path.is_file() or storage.remote):
+                storage.delete(path)
                 removed += 1
         case_dir = (output_root / f"case-{case.id}").resolve()
-        if case_dir.parent == output_root and case_dir.is_dir():
-            shutil.rmtree(case_dir, ignore_errors=True)
+        if case_dir.parent == output_root and (case_dir.is_dir() or storage.remote):
+            storage.delete_tree(case_dir)
         entry.purged_at = now
         summary["purged"] += 1
         summary["files"] += removed

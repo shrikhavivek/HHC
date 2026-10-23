@@ -1,0 +1,6 @@
+tests/
+media/
+outputs/
+*.db
+__pycache__/
+.pytest_cache/

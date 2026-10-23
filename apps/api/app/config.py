@@ -9,6 +9,25 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:3000"
     output_dir: str = "./outputs"
     media_dir: str = "./media"
+    # Demo images are generated here; serverless hosts need a writable folder.
+    static_dir: str = ""
+    # "local" keeps files on disk; "supabase" syncs MEDIA_DIR/OUTPUT_DIR with a bucket.
+    storage_backend: str = "local"
+    supabase_url: str = ""
+    supabase_service_key: str = ""
+    supabase_bucket: str = "hhc"
+    storage_signed_url_seconds: int = 3600
+    # Serverless: no connection pool, and no prepared statements for the
+    # Supabase transaction pooler (port 6543).
+    database_null_pool: bool = False
+    # False when a separate migrate step (python -m app.migrate) creates tables.
+    run_startup_tasks: bool = True
+    # Worker runs on a schedule (GitHub Actions) instead of always on.
+    worker_heartbeat_window_seconds: int = 120
+    github_dispatch_repo: str = ""
+    github_dispatch_token: str = ""
+    github_dispatch_workflow: str = "worker.yml"
+    github_dispatch_ref: str = "master"
     public_api_url: str = "http://localhost:8000"
     auto_approve: bool = False
     wordpress_publisher_enabled: bool = False
@@ -70,6 +89,10 @@ def get_settings() -> Settings:
         raise RuntimeError("ARCHIVE_PURGE_GRACE_DAYS cannot be negative")
     if settings.history_retention_days < 0:
         raise RuntimeError("HISTORY_RETENTION_DAYS cannot be negative")
+    if settings.storage_backend not in {"local", "supabase"}:
+        raise RuntimeError("STORAGE_BACKEND must be local or supabase")
+    if settings.storage_backend == "supabase" and not (settings.supabase_url and settings.supabase_service_key):
+        raise RuntimeError("Supabase storage requires SUPABASE_URL and SUPABASE_SERVICE_KEY")
     if bool(settings.reddit_client_id.strip()) != bool(settings.reddit_client_secret.strip()):
         raise RuntimeError("REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET must be configured together")
     return settings

@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { EditorialDesk, type EditorialDeskHandle } from "@/components/editorial-desk";
 import { readResume, rememberStory, storyDestination, validCaseId } from "@/lib/editorial-flow";
+import { stageFormFile } from "@/lib/staged-upload";
 import { StudioBrand } from "@/components/studio-brand";
 import { CroppedPhotoPreview } from "@/components/cropped-photo-preview";
 import { CollageLayoutPreview, useLayoutPreviews } from "@/components/collage-layout-preview";
@@ -1248,7 +1249,7 @@ export default function DashboardPage() {
     payload.set("editor_id", "editor@atelier");
     setUploadBusy(true);
     try {
-      const response = await fetch(`/api/backend/cases/${selected.id}/collage/assets`, { method: "POST", body: payload });
+      const response = await fetch(`/api/backend/cases/${selected.id}/collage/assets`, { method: "POST", body: await stageFormFile(payload) });
       const data = await response.json();
       if (!response.ok) return setToast(data.detail || "The image could not be uploaded.");
       const caseId = selected.id;
@@ -1271,7 +1272,7 @@ export default function DashboardPage() {
     payload.set("editor_id", "editor@atelier");
     setWatermarkBusy(true);
     try {
-      const response = await fetch(`/api/backend/cases/${selected.id}/collage/watermark`, { method: "POST", body: payload });
+      const response = await fetch(`/api/backend/cases/${selected.id}/collage/watermark`, { method: "POST", body: await stageFormFile(payload) });
       const data = await response.json();
       if (!response.ok) return setToast(data.detail || "The watermark could not be uploaded.");
       setEditorWatermark(data.watermark);

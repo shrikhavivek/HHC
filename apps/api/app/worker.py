@@ -1,6 +1,11 @@
-"""Durable daily refresh and manual-run queue. Run: python -m app.worker."""
+"""Durable daily refresh and manual-run queue.
+
+Run always on with `python -m app.worker`, or once per schedule (GitHub Actions)
+with `python -m app.worker --once`.
+"""
 import hashlib
 import logging
+import sys
 import threading
 import time
 import uuid
@@ -19,11 +24,14 @@ from .editorial import locked_state
 from .instagram import run_instagram
 from .models import AuditEvent, JobRun, ServiceState
 from .security import current_actor
+from .storage import get_storage
 
 router = APIRouter(prefix="/api")
 logger = logging.getLogger(__name__)
 _local_lock = threading.Lock()
-STATIC_DIR = str(Path(__file__).parent / "static")
+# Slightly under an hour, so an hourly schedule that fires early still runs.
+HOURLY_SECONDS = 55 * 60
+STATIC_DIR = get_settings().static_dir or str(Path(__file__).parent / "static")
 
 @contextmanager
 def refresh_lock():
@@ -71,12 +79,14 @@ def maintain_archive(settings):
         if state.value.get("next_at", 0) > time.time():
             db.commit()
             return
-        state.value = {**state.value, "next_at": time.time() + 3600}
+        state.value = {**state.value, "next_at": time.time() + HOURLY_SECONDS}
         db.commit()
     try:
         with SessionLocal() as db:
             result = purge_closed_editions(db, settings)
             result["history"] = trim_history(db, settings)
+        # Browser uploads that were never attached to a case.
+        result["stale_uploads"] = get_storage().delete_stale_incoming()
     except Exception:
         logger.exception("Archive retention failed")
         return
@@ -85,11 +95,12 @@ def maintain_archive(settings):
         state.value = {**state.value, "last_result": result, "last_at": time.time()}
         db.commit()
 
-def tick():
+def tick() -> bool:
+    """Run at most one due or queued edition refresh; True when one ran."""
     settings = get_settings()
     with refresh_lock() as acquired:
         if not acquired:
-            return
+            return False
         maintain_archive(settings)
         now = datetime.now(timezone.utc)
         today = now.astimezone(ZoneInfo(settings.reddit_daily_timezone)).date()
@@ -125,7 +136,7 @@ def tick():
                     break
             if not job:
                 db.commit()
-                return
+                return False
             job.status = "running"
             job.attempts = (job.attempts or 0) + 1
             db.commit()
@@ -141,8 +152,27 @@ def tick():
             if state_key:
                 state = locked_state(db, state_key, {})
                 attempts = state.value.get("failures", 0) + 1 if not successful else 0
-                state.value = {"next_at": time.time() + (3600 if successful else min(3600, 300 * 2 ** min(attempts, 4))), "failures": attempts, "finalized": successful and target < today, "last_job_id": job_id}
+                state.value = {"next_at": time.time() + (HOURLY_SECONDS if successful else min(3600, 300 * 2 ** min(attempts, 4))), "failures": attempts, "finalized": successful and target < today, "last_job_id": job_id}
             db.commit()
+        return True
+
+
+def dispatch_worker(settings) -> bool:
+    """Start the scheduled worker now (GitHub Actions) instead of at its next run."""
+    if not (settings.github_dispatch_repo and settings.github_dispatch_token):
+        return False
+    import requests
+    try:
+        response = requests.post(
+            f"https://api.github.com/repos/{settings.github_dispatch_repo}/actions/workflows/{settings.github_dispatch_workflow}/dispatches",
+            headers={"Authorization": f"Bearer {settings.github_dispatch_token}", "Accept": "application/vnd.github+json"},
+            json={"ref": settings.github_dispatch_ref}, timeout=15)
+    except requests.RequestException:
+        logger.exception("Worker dispatch failed")
+        return False
+    if response.status_code != 204:
+        logger.warning("Worker dispatch returned %s", response.status_code)
+    return response.status_code == 204
 
 @router.post("/runs/refresh", status_code=202)
 def queue_refresh(target_date: date | None = None, db: Session = Depends(get_db)):
@@ -157,7 +187,7 @@ def queue_refresh(target_date: date | None = None, db: Session = Depends(get_db)
     db.flush()
     db.add(AuditEvent(entity_type="job_run", entity_id=job.id, action="queued", actor=current_actor(), detail={"target_date": str(day)}))
     db.commit()
-    return {"job_id": job.id, "status": "queued"}
+    return {"job_id": job.id, "status": "queued", "dispatched": dispatch_worker(settings)}
 
 @router.get("/operations")
 def operations(db: Session = Depends(get_db)):
@@ -169,7 +199,9 @@ def operations(db: Session = Depends(get_db)):
         "timezone": settings.reddit_daily_timezone,
         "daily_time_utc": f"{settings.daily_automation_hour_utc:02}:{settings.daily_automation_minute_utc:02}",
         "automatic": settings.daily_automation_enabled,
-        "worker_online": bool(heartbeat and heartbeat.value.get("at", 0) > time.time() - 120),
+        # A scheduled worker can be started on demand, so queued refreshes still run.
+        "worker_online": bool(heartbeat and heartbeat.value.get("at", 0) > time.time() - settings.worker_heartbeat_window_seconds)
+            or bool(settings.github_dispatch_repo and settings.github_dispatch_token),
         "reddit": {"configured": settings.reddit_source_mode != "manual", "mode": "Public feeds" if settings.reddit_source_mode == "rss" else "OAuth" if settings.reddit_client_id else "Manual"},
         "instagram": {"configured": bool(settings.instagram_access_token and settings.instagram_account_id), "accounts": [x.strip() for x in settings.instagram_watch_accounts.split(",") if x.strip()]},
         "wordpress": {"enabled": settings.wordpress_publisher_enabled, "site": settings.wordpress_site_url},
@@ -183,8 +215,20 @@ def heartbeat():
         state.value = {"at": time.time()}
         db.commit()
 
+def run_once(budget_seconds: int = 50 * 60):
+    """One scheduled run: work through due and queued refreshes, then exit."""
+    started = time.time()
+    heartbeat()
+    while tick() and time.time() - started < budget_seconds:
+        heartbeat()
+    heartbeat()
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
+    if "--once" in sys.argv:
+        run_once()
+        sys.exit(0)
     Base.metadata.create_all(engine)
     def keep_alive():
         while True:

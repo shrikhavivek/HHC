@@ -27,6 +27,7 @@ from .designer_search import find_official_designer_reference
 from .models import ArchiveEntry, AuditEvent, Candidate, Case, Collage, Decision, JobRun
 from .public_sources import DuplicatePublicSourceError, PublicSourceError, compact_source_image, download_public_images, inspect_public_post, normalized_published_date
 from .publication_dates import is_current_week
+from .storage import get_storage
 
 
 BLOCKED_TITLE_PREFIXES = ("[request]", "id this", "who is", "weekly thread")
@@ -1107,6 +1108,8 @@ def _download_image(url: str, media_dir: str, user_agent: str, *, subfolder: str
     for existing in destination_dir.glob(f"{digest}.*"):
         if _usable_image_file(existing):
             return f"/media-files/{subfolder}/{existing.name}"
+    if get_storage().remote and get_storage().exists(destination_dir / f"{digest}.webp"):
+        return f"/media-files/{subfolder}/{digest}.webp"
     try:
         from .public_sources import _fetch_limited
         _, content, _ = _fetch_limited(url, user_agent=user_agent, allowed_domains=None, source_document=False, maximum_bytes=25 * 1024 * 1024, accept="image/*")
@@ -1117,6 +1120,7 @@ def _download_image(url: str, media_dir: str, user_agent: str, *, subfolder: str
             return None
         destination = destination_dir / f"{digest}.webp"
         destination.write_bytes(compact_source_image(content))
+        get_storage().saved(destination)
         return f"/media-files/{subfolder}/{destination.name}"
     except (requests.RequestException, OSError, ValueError, Image.DecompressionBombError):
         return None
@@ -1385,12 +1389,18 @@ def _image_descriptor(path: Path) -> tuple[list[float], int] | None:
         return None
 
 
-def _local_media_path(image_path: str, media_dir: str) -> Path | None:
-    if not image_path.startswith("/media-files/"):
+def _media_file(image_path: str, media_dir: str) -> Path | None:
+    """Where a /media-files/ path lives under MEDIA_DIR, whether or not it is cached."""
+    if not isinstance(image_path, str) or not image_path.startswith("/media-files/"):
         return None
     root = Path(media_dir).resolve()
     path = (root / image_path.removeprefix("/media-files/")).resolve()
-    return path if root in path.parents and path.is_file() else None
+    return path if root in path.parents else None
+
+
+def _local_media_path(image_path: str, media_dir: str) -> Path | None:
+    path = _media_file(image_path, media_dir)
+    return path if path and get_storage().ensure(path) else None
 
 
 def _usable_media_asset(image_path: str, media_dir: str) -> bool:
@@ -1422,13 +1432,12 @@ def _visual_similarity(left_path: str, right_path: str, media_dir: str) -> float
 
 
 def _archived_descriptor(prior: Case, entry: ArchiveEntry | None, media_dir: str) -> tuple[list[float], int] | None:
-    path = _local_media_path(prior.base_image, media_dir)
-    if path:
-        return _image_descriptor(path)
+    # A stored fingerprint avoids downloading every archived photo.
     fingerprint = entry.fingerprint if entry and isinstance(entry.fingerprint, dict) else None
-    if not fingerprint or not isinstance(fingerprint.get("histogram"), list) or not isinstance(fingerprint.get("dhash"), int):
-        return None
-    return fingerprint["histogram"], fingerprint["dhash"]
+    if fingerprint and isinstance(fingerprint.get("histogram"), list) and isinstance(fingerprint.get("dhash"), int):
+        return fingerprint["histogram"], fingerprint["dhash"]
+    path = _local_media_path(prior.base_image, media_dir)
+    return _image_descriptor(path) if path else None
 
 
 def _historical_matches(db: Session, case: Case, media_dir: str, limit: int = 3) -> list[tuple[Case, float, float, float, dict]]:
@@ -1708,9 +1717,11 @@ def _add_official_designer_reference(case: Case, settings) -> dict:
 
 
 def _same_file(left_path: str, right_path: str, media_dir: str) -> bool:
-    left = _local_media_path(left_path, media_dir)
-    right = _local_media_path(right_path, media_dir)
-    if not left or not right or left.stat().st_size != right.stat().st_size:
+    if left_path == right_path:
+        return True
+    # Only photos already on this instance are compared, to avoid downloads.
+    left, right = _media_file(left_path, media_dir), _media_file(right_path, media_dir)
+    if not left or not right or not left.is_file() or not right.is_file() or left.stat().st_size != right.stat().st_size:
         return False
     return hashlib.sha256(left.read_bytes()).digest() == hashlib.sha256(right.read_bytes()).digest()
 
@@ -2230,12 +2241,12 @@ def import_public_post_automation(db: Session, payload: dict, settings, static_d
     except PublicSourceError:
         db.rollback()
         for path in created_files:
-            path.unlink(missing_ok=True)
+            get_storage().delete(path)
         raise
     except Exception as exc:
         db.rollback()
         for path in created_files:
-            path.unlink(missing_ok=True)
+            get_storage().delete(path)
         raise AutomationError(f"Public post import failed: {exc}") from exc
 
 

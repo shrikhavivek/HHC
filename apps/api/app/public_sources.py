@@ -13,6 +13,7 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import requests
 from .safe_http import public_get
+from .storage import get_storage
 from bs4 import BeautifulSoup
 from PIL import Image, ImageOps, UnidentifiedImageError
 
@@ -487,6 +488,8 @@ def download_public_images(
         temporary: Path | None = None
         digest = hashlib.sha256(image_url.encode("utf-8")).hexdigest()[:24]
         existing = next((path for path in destination_dir.glob(f"{digest}.*") if _existing_image(path)), None)
+        if existing is None and get_storage().remote and get_storage().exists(destination_dir / f"{digest}.webp"):
+            existing = destination_dir / f"{digest}.webp"
         if existing:
             valid_urls.append(image_url)
             local_paths.append(f"/media-files/imports/{existing.name}")
@@ -515,6 +518,7 @@ def download_public_images(
             temporary = destination_dir / f".{digest}.tmp"
             temporary.write_bytes(compact_source_image(content))
             temporary.replace(destination)
+            get_storage().saved(destination)
             valid_urls.append(image_url)
             local_paths.append(f"/media-files/imports/{destination.name}")
             created_files.append(destination)

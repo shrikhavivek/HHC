@@ -6,6 +6,8 @@ from pathlib import Path
 
 from PIL import Image, ImageOps, UnidentifiedImageError
 
+from .storage import get_storage
+
 
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 MAX_WATERMARK_UPLOAD_BYTES = 8 * 1024 * 1024
@@ -56,6 +58,7 @@ def store_editor_image(content: bytes, media_dir: str, file_key: str) -> tuple[s
             image.save(temporary, "WEBP", quality=95, method=6, lossless=image.mode == "RGBA")
             image.close()
         temporary.replace(destination)
+        get_storage().saved(destination)
     except UploadValidationError:
         temporary.unlink(missing_ok=True)
         raise
@@ -114,6 +117,7 @@ def store_watermark_image(content: bytes, media_dir: str, file_key: str) -> tupl
             image.save(temporary, "WEBP", lossless=True, method=6)
             image.close()
         temporary.replace(destination)
+        get_storage().saved(destination)
     except UploadValidationError:
         temporary.unlink(missing_ok=True)
         raise
