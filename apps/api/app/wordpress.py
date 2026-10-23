@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from .archive import remember_wordpress_collage
 from .config import get_settings
 from .database import get_db
 from .editorial import locked_state
@@ -179,6 +180,15 @@ def send_draft(case_id: str, x_wp_authorization: str = Header(default=""), db: S
         story.sync_state = "draft_created"
         db.add(AuditEvent(entity_type="case", entity_id=case_id, action="wordpress_draft_sent", actor=current_actor(), detail={"post_id": post["id"], "collage_id": collage.id, "story_revision": story.revision}))
         db.commit()
+        try:
+            # WordPress keeps the final collage; we keep its URL and a reference photo.
+            # The draft is already committed, so archive bookkeeping must not mark it uncertain.
+            case = db.get(Case, case_id)
+            if case:
+                remember_wordpress_collage(db, case, attachment["source_url"], settings.media_dir)
+                db.commit()
+        except Exception:
+            db.rollback()
         return {"post_id": post["id"], "status": "draft", "edit_url": f"{site}/wp-admin/post.php?post={post['id']}&action=edit"}
     except Exception:
         db.rollback()

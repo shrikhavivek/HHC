@@ -16,8 +16,10 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 from .assets import build_panel_catalog, build_render_assets, default_panel_ids, normalize_case_assets
+from .archive import keep_verified_look
 from .automation import (
     AutomationError,
+    _automatic_draft,
     MATCHER_VERSION,
     case_content_eligible,
     editorial_subject_eligibility,
@@ -47,7 +49,7 @@ from .schemas import CollageEditInput, CollageInput, DecisionInput, FashionCateg
 from .seed import seed_database
 from .security import PrivateAPIMiddleware, current_actor
 from .review import approval_errors
-from .editorial import router as editorial_router
+from .editorial import locked_state, router as editorial_router
 from .wordpress import router as wordpress_router
 from .worker import router as worker_router
 from .instagram_browser import router as instagram_browser_router
@@ -314,8 +316,26 @@ def get_case(case_id: str, db: Session = Depends(get_db)):
     case = db.scalar(stmt)
     if not case or not case_content_eligible(case):
         raise HTTPException(404, "Case not found")
+    pending = (case.extraction or {}).get("automatic_collage") or {}
+    if pending.get("pending"):
+        # Hourly pulls only collect sources; the draft is built on first open.
+        locked_state(db, f"collage-render:{case.id}", {})
+        db.refresh(case)
+        if ((case.extraction or {}).get("automatic_collage") or {}).get("pending"):
+            candidates = [item for item in case.candidates if item.status != "automation_draft_anchor"]
+            try:
+                _automatic_draft(db, case, candidates, settings, STATIC_DIR, render=True)
+                db.add(AuditEvent(entity_type="case", entity_id=case.id, action="automatic_draft_rendered_on_open", actor=current_actor(), detail={}))
+            except (OSError, ValueError):
+                db.rollback()
+                case = db.scalar(stmt)
+        db.commit()
     data = case_json(case, detail=True)
     collage = db.scalar(select(Collage).where(Collage.case_id == case_id).order_by(Collage.created_at.desc()))
+    if collage and not Path(collage.image_path).is_file():
+        # Renders of closed editions are purged; the sent copy lives in WordPress.
+        data["assets_purged"] = True
+        collage = None
     relative_dir = Path(collage.image_path).resolve().parent.relative_to(Path(settings.output_dir).resolve()).as_posix() if collage else f"case-{case.id}"
     preview_url = f"/outputs/{relative_dir}/collage.webp"
     base_preview_path = Path(settings.output_dir) / relative_dir / "collage-base.webp"
@@ -461,6 +481,8 @@ def decide(candidate_id: str, payload: DecisionInput, db: Session = Depends(get_
     db.add(decision)
     db.flush()
     db.add(AuditEvent(entity_type="candidate", entity_id=candidate.id, action=f"decision:{payload.decision}", actor=payload.editor_id, detail={"reason": payload.reason, "decision_id": decision.id}))
+    if payload.decision == "approved":
+        keep_verified_look(db, candidate.case, settings.media_dir, candidate)
     db.commit()
     return candidate_json(candidate)
 

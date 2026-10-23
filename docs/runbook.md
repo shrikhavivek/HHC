@@ -57,7 +57,10 @@ for HHC_TEST_BASE_URL and other test settings.
 ## Backup and production release
 
 Back up PostgreSQL, output_data and media_data together and test restoration.
-Immutable render versions accumulate: monitor volume usage and define retention.
+Render versions accumulate until archive purge is enabled. Keep
+ARCHIVE_PURGE_ENABLED=false until archive entries exist for closed cases, then
+enable it; after that, renders and source photos of closed editions are deleted.
+The reference/ folder in media_data holds verified-look photos: back it up.
 Keep provider credentials and SESSION_SECRET in the deployment secret store.
 
 Before public access: configure HTTPS, production mode, strong secrets, a

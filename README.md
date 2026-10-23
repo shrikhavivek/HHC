@@ -310,6 +310,28 @@ prevent simultaneous refresh workers. Queued run-now requests survive API
 restarts. A terminated active job becomes interrupted and the scheduled edition
 can retry. The app needs to remain running for daily refresh to occur.
 
+### Collage rendering and archive retention
+
+Hourly pulls collect sources, fingerprints and archive matches but do not
+render collages. A draft collage is rendered the first time an editor opens the
+case. Set `COLLAGE_RENDER_ON_PULL=true` to restore rendering during intake.
+
+Once a case leaves the current edition, the worker records an archive entry:
+keywords, outfit signature (garments, details, colours) and an image
+fingerprint. Approved cases and cases sent to WordPress also keep one 1080 px
+WebP reference photo under `media/reference/`, and sent cases keep the
+WordPress media URL. Future matching uses the fingerprint when the original
+photo is gone, then shows the reference photo or re-fetches the source post.
+Leads whose photo cannot be recovered are not offered.
+
+`ARCHIVE_PURGE_ENABLED=false` (default) only records archive entries. With
+`true`, the worker also deletes the closed case's source photos and collage
+renders, hourly. Case rows, decisions, audit events and stories are kept.
+Photos still used by a desk case are kept. Edited collages and unsent stories
+are held for `ARCHIVE_PURGE_GRACE_DAYS` (default 7) after their last change;
+sends that are in progress or uncertain are never purged. Run the worker with
+purge disabled first and check the archive entries before enabling it.
+
 ## WordPress
 
 Set `WORDPRESS_SITE_URL` to the site's HTTPS home URL and

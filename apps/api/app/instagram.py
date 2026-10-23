@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 import requests
 from sqlalchemy import select
-from .automation import _add_matches, _collage_assets, editorial_subject_eligibility, parse_outfit, render_draft_collage
+from .automation import _add_matches, _automatic_draft, _collage_assets, editorial_subject_eligibility, parse_outfit
 from .models import AuditEvent, Case
 from .providers import before_request, observe_response, ProviderDeferred
 from .public_sources import download_public_images
@@ -104,8 +104,7 @@ def run_instagram(db, settings, static_dir, target_date):
         case.extraction = {**case.extraction, "published_at": post["published"].isoformat()}
         db.flush()
         candidates = _add_matches(db, case, settings.media_dir)
-        collage = render_draft_collage(db, case, candidates, settings, static_dir)
-        case.extraction = {**case.extraction, "automatic_collage": {"id": collage.id, "panels": len(images)}}
+        _automatic_draft(db, case, candidates, settings, static_dir)
         db.add(AuditEvent(entity_type="case", entity_id=case.id, action="instagram_imported", actor="daily-automation", detail={"account": post["account"]}))
         db.commit()
         summary["created"] += 1

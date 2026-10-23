@@ -33,6 +33,12 @@ class Settings(BaseSettings):
     daily_designer_search_budget: int = 8
     daily_automation_hour_utc: int = 3
     daily_automation_minute_utc: int = 30
+    # Hourly pulls collect sources only; collages render when an editor opens a case.
+    collage_render_on_pull: bool = False
+    # Closed editions keep text, fingerprints and verified-look references.
+    # Image deletion stays off until the archive backfill has been checked.
+    archive_purge_enabled: bool = False
+    archive_purge_grace_days: int = 7
     scheduler_in_api: bool = True
     instagram_access_token: str = ""
     instagram_account_id: str = ""
@@ -58,6 +64,8 @@ def get_settings() -> Settings:
             raise RuntimeError("Replace the demonstration database password before production")
     if not 0 <= settings.daily_automation_hour_utc <= 23 or not 0 <= settings.daily_automation_minute_utc <= 59:
         raise RuntimeError("Daily automation time must be a valid UTC hour and minute")
+    if settings.archive_purge_grace_days < 0:
+        raise RuntimeError("ARCHIVE_PURGE_GRACE_DAYS cannot be negative")
     if bool(settings.reddit_client_id.strip()) != bool(settings.reddit_client_secret.strip()):
         raise RuntimeError("REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET must be configured together")
     return settings

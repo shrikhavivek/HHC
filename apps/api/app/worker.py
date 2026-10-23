@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
+from .archive import purge_closed_editions
 from .automation import run_daily_automation
 from .config import get_settings
 from .database import Base, SessionLocal, engine, get_db
@@ -63,11 +64,32 @@ def run_sources(settings, target):
         logger.exception("Instagram daily refresh failed")
     return results
 
+def maintain_archive(settings):
+    """Hourly: archive closed editions as text, then purge their images if enabled."""
+    with SessionLocal() as db:
+        state = locked_state(db, "archive:retention", {})
+        if state.value.get("next_at", 0) > time.time():
+            db.commit()
+            return
+        state.value = {**state.value, "next_at": time.time() + 3600}
+        db.commit()
+    try:
+        with SessionLocal() as db:
+            result = purge_closed_editions(db, settings)
+    except Exception:
+        logger.exception("Archive retention failed")
+        return
+    with SessionLocal() as db:
+        state = locked_state(db, "archive:retention", {})
+        state.value = {**state.value, "last_result": result, "last_at": time.time()}
+        db.commit()
+
 def tick():
     settings = get_settings()
     with refresh_lock() as acquired:
         if not acquired:
             return
+        maintain_archive(settings)
         now = datetime.now(timezone.utc)
         today = now.astimezone(ZoneInfo(settings.reddit_daily_timezone)).date()
         with SessionLocal() as db:

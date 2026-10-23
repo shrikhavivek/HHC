@@ -60,7 +60,7 @@ def test_browser_import_auth_duplicate_date_brand_and_image_validation(monkeypat
         with Session(engine) as db:
             yield db
     main.app.dependency_overrides[get_db] = database
-    monkeypatch.setattr(browser, "get_settings", lambda: SimpleNamespace(reddit_daily_timezone="Asia/Kolkata", media_dir=str(tmp_path), output_dir=str(tmp_path / "outputs")))
+    monkeypatch.setattr(browser, "get_settings", lambda: SimpleNamespace(reddit_daily_timezone="Asia/Kolkata", media_dir=str(tmp_path), output_dir=str(tmp_path / "outputs"), collage_render_on_pull=True))
     metadata = {"handle": "kritisanon", "shortcode": "abc", "published_at": datetime.now(timezone.utc).isoformat(), "caption": "Wearing @gucci", "media_type": "IMAGE", "date_evidence": "post_permalink_time"}
     photo = io.BytesIO()
     Image.new("RGB", (400, 600)).save(photo, "PNG")
@@ -118,7 +118,7 @@ def browser_client():
 @pytest.mark.parametrize("legacy", [False, True])
 def test_carousel_import_expands_existing_draft_without_duplicate_or_lost_edits(browser_client, monkeypatch, tmp_path, legacy):
     client, headers, engine = browser_client
-    monkeypatch.setattr(browser, "get_settings", lambda: SimpleNamespace(reddit_daily_timezone="Asia/Kolkata", media_dir=str(tmp_path), output_dir=str(tmp_path / "outputs")))
+    monkeypatch.setattr(browser, "get_settings", lambda: SimpleNamespace(reddit_daily_timezone="Asia/Kolkata", media_dir=str(tmp_path), output_dir=str(tmp_path / "outputs"), collage_render_on_pull=True))
     metadata = {"handle": "ananyapanday", "shortcode": "carousel", "published_at": datetime.now(timezone.utc).isoformat(), "caption": "Wearing @chanelofficial", "media_type": "IMAGE", "date_evidence": "post_permalink_time"}
     photos = []
     for color in ["red", "blue", "green"]:

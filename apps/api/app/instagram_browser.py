@@ -352,10 +352,13 @@ async def import_post(metadata: str = Form(..., max_length=15000), image: Upload
             **({"collage_edit": edit} if edit else {})}
         if not existing or added_ids or cover_refreshed:
             candidates = [candidate for candidate in case.candidates if candidate.status != "automation_draft_anchor"]
-            collage = render_draft_collage(db, case, candidates, settings, str(Path(__file__).parent / "static"),
-                reason="Photos captured from the same browser-observed Instagram carousel. Brand attribution, outfit identity and publication rights require review.")
             panel_count = len(build_render_assets(case, candidates, include_automation_matches=True, panel_ids=edit.get("panel_ids")))
-            case.extraction = {**case.extraction, "automatic_collage": {"id": collage.id, "panels": panel_count}}
+            if getattr(settings, "collage_render_on_pull", False):
+                collage = render_draft_collage(db, case, candidates, settings, str(Path(__file__).parent / "static"),
+                    reason="Photos captured from the same browser-observed Instagram carousel. Brand attribution, outfit identity and publication rights require review.")
+                case.extraction = {**case.extraction, "automatic_collage": {"id": collage.id, "panels": panel_count}}
+            else:
+                case.extraction = {**case.extraction, "automatic_collage": {"id": None, "panels": panel_count, "pending": True}}
         db.add(AuditEvent(entity_type="case", entity_id=case.id, action="instagram_carousel_expanded" if existing else "instagram_browser_imported",
             actor=current_actor(), detail={"source": permalink, "photo_count": len(known), "complete": complete, "added": len(added_ids)}))
         db.commit()
