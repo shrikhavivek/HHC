@@ -14,6 +14,7 @@ Vercel deployment. Docker Compose still works unchanged (`STORAGE_BACKEND=local`
 | Files | Supabase Storage, private bucket `hhc` | Created automatically by the migrate step |
 | Hourly worker | GitHub Actions (`.github/workflows/worker.yml`) | Runs at :35 every hour; can be started from "Refresh now" |
 | Instagram collector | Your computer | Set `HHC_API_URL` to the API's Vercel URL |
+| Reddit gallery recovery | Your computer | Same `HHC_API_URL`; screenshots go straight to the bucket |
 
 ## How files work
 
@@ -49,8 +50,9 @@ paths as before.
    `apps/api`, add the "API" variables, deploy.
 5. **Vercel web project:** import the repo again, set *Root Directory* to
    `apps/web`, add the "Web" variables, deploy.
-6. **Collector:** add `HHC_API_URL=https://<api>.vercel.app` and the production
-   `EDITOR_API_KEY` to the repo's `.env` on your computer.
+6. **Collectors** (Instagram and Reddit gallery recovery): add
+   `HHC_API_URL=https://<api>.vercel.app` and the production `EDITOR_API_KEY`
+   to the repo's `.env` on your computer.
 7. **Optional, "Refresh now":** create a fine-grained GitHub token with
    *Actions: read and write* on this repo, and set the `GITHUB_DISPATCH_*`
    variables on the API project.

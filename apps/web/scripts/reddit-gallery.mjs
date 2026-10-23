@@ -7,16 +7,20 @@ import { fileURLToPath } from "node:url";
 import { postId } from "./reddit-gallery-rules.mjs";
 import { captureRedditCarousel } from "./reddit-carousel.mjs";
 import { redditSessionState, waitForRedditLogin } from "./reddit-login.mjs";
+import { apiRootFrom, stagePhotos } from "./staged-photos.mjs";
 
 const envFile = process.env.HHC_ENV_FILE || fileURLToPath(new URL("../../../.env", import.meta.url));
 const environment = parseEnv(await readFile(envFile, "utf8"));
 const key = process.env.EDITOR_API_KEY || environment.EDITOR_API_KEY || ((process.env.APP_ENV || environment.APP_ENV) === "production" ? "" : "local-editor-key");
 if (!key) throw new Error("Configure EDITOR_API_KEY in the local environment file");
+const apiRoot = apiRootFrom(environment);
+const headers = {"X-Editor-Key": key, "X-Editor-Id": "local-reddit-browser"};
 async function api(path, body) {
   const form = body instanceof FormData;
-  const response = await fetch(`http://127.0.0.1:8100/api/reddit-gallery${path}`, {
+  if (form) body = await stagePhotos(body, apiRoot, headers);
+  const response = await fetch(`${apiRoot}/api/reddit-gallery${path}`, {
     method: body ? "POST" : "GET", redirect: "error",
-    headers: {"X-Editor-Key": key, "X-Editor-Id": "local-reddit-browser", ...(!form ? {"Content-Type": "application/json"} : {})},
+    headers: {...headers, ...(!form ? {"Content-Type": "application/json"} : {})},
     body: body ? form ? body : JSON.stringify(body) : undefined, signal: AbortSignal.timeout(180000),
   });
   const data = await response.json();

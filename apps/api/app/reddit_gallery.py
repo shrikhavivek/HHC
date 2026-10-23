@@ -20,6 +20,8 @@ from .editorial import locked_state
 from .editor_uploads import store_editor_image, UploadValidationError
 from .models import AuditEvent, Case, StoryDraft
 from .security import current_actor
+from .storage import get_storage
+from .uploads import staged_uploads
 
 router = APIRouter(prefix="/api/reddit-gallery")
 
@@ -106,7 +108,7 @@ def apply_recovery(case_id, payload, db, captured_paths=None):
     case.extraction = {**case.extraction, "collage_edit": edit, "gallery_retry": {"status": "completed", "method": "local_browser", "checked_at": now, "found": len(urls), "downloaded": len(paths)}}
     if captured_paths is not None:
         case.extraction = {**case.extraction, "image_capture": {"kind": "browser_screenshot", "scope": "post_carousel", "photo_count": len(paths)}}
-    collage = render_draft_collage(db, case, list(case.candidates), settings, str(Path(__file__).parent / "static"), editor_id=current_actor())
+    collage = render_draft_collage(db, case, list(case.candidates), settings, getattr(settings, "static_dir", "") or str(Path(__file__).parent / "static"), editor_id=current_actor())
     count = len(build_render_assets(case, case.candidates, include_automation_matches=True, panel_ids=edit.get("panel_ids")))
     case.extraction = {**case.extraction, "automatic_collage": {"id": collage.id, "panels": count}}
     if story:
@@ -117,7 +119,10 @@ def apply_recovery(case_id, payload, db, captured_paths=None):
 
 
 @router.post("/cases/{case_id}/screenshots")
-async def recover_screenshots(case_id: str, metadata: str = Form(..., max_length=20000), images: list[UploadFile] = File(...), db: Session = Depends(get_db)):
+async def recover_screenshots(case_id: str, metadata: str = Form(..., max_length=20000), images: list[UploadFile] = File(default=[]),
+        upload_keys: str = Form(""), db: Session = Depends(get_db)):
+    # Hosted setups send storage keys instead of files (4.5 MB request cap).
+    images = images or staged_uploads(upload_keys)
     try:
         raw = json.loads(metadata)
         if not isinstance(raw, dict) or raw.get("carousel_complete") is not True:
@@ -156,4 +161,4 @@ async def recover_screenshots(case_id: str, metadata: str = Form(..., max_length
             for path in paths:
                 target = root / Path(path).name
                 if target.parent == root and not target.is_symlink():
-                    target.unlink(missing_ok=True)
+                    get_storage().delete(target)
