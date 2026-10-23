@@ -27,6 +27,7 @@ type Dashboard = {
   last_run?: { id: string; status: string; created_at: string } | null;
 };
 type CaseSummary = {
+  gallery_incomplete?: boolean;
   published_at?: string | null;
   published_date?: string | null;
   web_discovered?: boolean;
@@ -1424,10 +1425,14 @@ export default function DashboardPage() {
             <dl className="look-facts"><div><dt>Designer</dt><dd>{selected.designer}</dd></div><div><dt>{selected.published_date ? "Post published" : "Appearance"}</dt><dd>{selected.published_date || selected.event_date || "Date to verify"}{selected.web_discovered && <span>Source publication date</span>}</dd></div><div><dt>Discovery signal</dt><dd>{Math.round(selected.confidence * 100)}%<span>Not editorial verification</span></dd></div></dl>
 
             <OutfitContext key={selected.id} selected={selected} onSaved={() => void openCase(selected.id)}/>
+            <section className="automatic-draft-copy" aria-label="Collage actions">
+              {selected.gallery_incomplete && <p role="status">Only the cover photo was imported. Reddit has not provided the full gallery yet. You can edit this photo or add the missing photos in the collage editor.</p>}
+              <button type="button" className="primary" onClick={openCollageEditor}><Icon name="edit"/>Edit collage</button>
+            </section>
             {candidate && <MatchVerification key={candidate.id} candidateId={candidate.id} currentDate={selected.event_date} earlierDate={candidate.event_date} onVerified={() => void openCase(selected.id)}/>}
             {selected.latest_collage && <section className="automatic-draft-card">
-              <div className="automatic-draft-image"><img src={asset(selected.latest_collage.preview_url)} alt={`Automatic collage for ${selected.celebrity}`}/><span>Generated automatically</span></div>
-              <div className="automatic-draft-copy"><small>Today’s ready-to-review output</small><h3>Collage ready</h3><p>Open the editor to choose Side by side, adjust each crop, or use a fixed portrait or landscape layout.</p><div><span><Icon name="check" size={13}/>{automaticPanelCount} source panel{automaticPanelCount === 1 ? "" : "s"} in one image</span><span><Icon name="shield" size={13}/>Draft only — never auto-published</span></div><footer><button type="button" className="primary" onClick={() => setCollageResult({ previewUrl: asset(selected.latest_collage!.preview_url), bundleUrl: selected.latest_collage!.bundle_url.replace(/^\/api\//, "/api/backend/"), assetCount: automaticPanelCount, canvasFormat: selected.collage_editor.canvas_format, layoutTemplate: selected.collage_editor.layout_template })}><Icon name="eye"/>View collage</button><button type="button" className="ghost" onClick={openCollageEditor}><Icon name="edit"/>Edit collage &amp; sources</button><a className="ghost" href={selected.latest_collage.bundle_url.replace(/^\/api\//, "/api/backend/")} target="_blank" rel="noreferrer"><Icon name="download"/>Evidence bundle</a></footer></div>
+              <div className="automatic-draft-image"><img src={asset(selected.latest_collage.preview_url)} alt={`Automatic collage for ${selected.celebrity}`}/><span>{selected.gallery_incomplete ? "Cover photo only" : "Generated automatically"}</span></div>
+              <div className="automatic-draft-copy"><small>Today’s ready-to-review output</small><h3>{selected.gallery_incomplete ? "Cover preview · gallery incomplete" : "Collage ready"}</h3><p>Open the editor to choose Side by side, adjust each crop, or use a fixed portrait or landscape layout.</p><div><span><Icon name="check" size={13}/>{automaticPanelCount} source panel{automaticPanelCount === 1 ? "" : "s"} in one image</span><span><Icon name="shield" size={13}/>Draft only — never auto-published</span></div><footer><button type="button" className="primary" onClick={() => setCollageResult({ previewUrl: asset(selected.latest_collage!.preview_url), bundleUrl: selected.latest_collage!.bundle_url.replace(/^\/api\//, "/api/backend/"), assetCount: automaticPanelCount, canvasFormat: selected.collage_editor.canvas_format, layoutTemplate: selected.collage_editor.layout_template })}><Icon name="eye"/>View collage</button><button type="button" className="ghost" onClick={openCollageEditor}><Icon name="edit"/>Edit collage &amp; sources</button><a className="ghost" href={selected.latest_collage.bundle_url.replace(/^\/api\//, "/api/backend/")} target="_blank" rel="noreferrer"><Icon name="download"/>Evidence bundle</a></footer></div>
             </section>}
 
             {!candidate && <>

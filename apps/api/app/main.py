@@ -51,6 +51,7 @@ from .editorial import router as editorial_router
 from .wordpress import router as wordpress_router
 from .worker import router as worker_router
 from .instagram_browser import router as instagram_browser_router
+from .reddit_gallery import router as reddit_gallery_router, incomplete as reddit_gallery_incomplete
 
 
 settings = get_settings()
@@ -117,6 +118,7 @@ def case_json(case: Case, detail=False):
         "fashion_category": case_fashion_category(case), "created_at": case.created_at.isoformat(),
         "published_at": published_at, "published_date": published_date,
         "web_discovered": bool(extraction.get("web_discovered")),
+        "gallery_incomplete": reddit_gallery_incomplete(case),
     }
     if detail:
         data["extraction"] = case.extraction
@@ -222,6 +224,7 @@ app.include_router(editorial_router)
 app.include_router(wordpress_router)
 app.include_router(worker_router)
 app.include_router(instagram_browser_router)
+app.include_router(reddit_gallery_router)
 
 
 @app.get("/health")
