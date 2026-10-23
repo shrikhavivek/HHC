@@ -61,6 +61,8 @@ Render versions accumulate until archive purge is enabled. Keep
 ARCHIVE_PURGE_ENABLED=false until archive entries exist for closed cases, then
 enable it; after that, renders and source photos of closed editions are deleted.
 The reference/ folder in media_data holds verified-look photos: back it up.
+HISTORY_RETENTION_DAYS (e.g. 90) bounds audit and job-run history; decisions
+and the lasting audit actions listed in the README are kept.
 Keep provider credentials and SESSION_SECRET in the deployment secret store.
 
 Before public access: configure HTTPS, production mode, strong secrets, a

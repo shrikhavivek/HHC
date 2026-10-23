@@ -9,16 +9,18 @@ import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from PIL import Image, ImageOps
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session, selectinload
 from .automation import _local_media_path, _outfit_signature, _tokens, image_fingerprint
 from .edition_window import in_current_edition
-from .models import ArchiveEntry, AuditEvent, Case, StoryDraft
+from .models import ArchiveEntry, AuditEvent, Case, JobRun, StoryDraft
 
 REFERENCE_DIR = "reference"
 REFERENCE_EDGE = 1080
 SENT_STATES = {"draft_created", "managed_in_wordpress"}
 IN_FLIGHT_STATES = {"sending", "uncertain"}
+# Kept past the history window: what was sent, verified or deleted, and why.
+LASTING_AUDIT_ACTIONS = {"wordpress_draft_sent", "evidence_verified", "attribution_corrected", "edition_assets_purged"}
 
 
 def _now(now: datetime | None) -> datetime:
@@ -157,3 +159,15 @@ def purge_closed_editions(db: Session, settings, *, now: datetime | None = None)
             detail={"media_files": removed, "reference_image": entry.reference_image, "wordpress_media_url": entry.wordpress_media_url}))
     db.commit()
     return summary
+
+
+def trim_history(db: Session, settings, *, now: datetime | None = None) -> dict:
+    """Delete routine audit events and finished job runs past the retention window."""
+    days = getattr(settings, "history_retention_days", 0)
+    if days <= 0:
+        return {"audit_events": 0, "job_runs": 0}
+    cutoff = _now(now) - timedelta(days=days)
+    events = db.execute(delete(AuditEvent).where(AuditEvent.created_at < cutoff, AuditEvent.action.not_in(LASTING_AUDIT_ACTIONS)))
+    runs = db.execute(delete(JobRun).where(JobRun.created_at < cutoff, JobRun.status.not_in({"queued", "running"})))
+    db.commit()
+    return {"audit_events": events.rowcount, "job_runs": runs.rowcount}

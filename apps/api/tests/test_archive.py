@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import io
 from pathlib import Path
 from types import SimpleNamespace
 import pytest
@@ -8,9 +9,10 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 from app import automation, main
-from app.archive import keep_verified_look, purge_closed_editions
+from app.archive import keep_verified_look, purge_closed_editions, trim_history
 from app.database import Base, get_db
-from app.models import ArchiveEntry, AuditEvent, Candidate, Case, Collage, StoryDraft
+from app.models import ArchiveEntry, AuditEvent, Candidate, Case, Collage, JobRun, StoryDraft
+from app.public_sources import SOURCE_MAX_EDGE, compact_source_image
 
 NOW = datetime(2026, 10, 22, 12, 0, tzinfo=timezone.utc)
 TITLE = "Deepika Padukone in Sabyasachi red embroidered lehenga with velvet cape"
@@ -159,3 +161,32 @@ def test_automatic_draft_defers_unless_render_on_pull(archive):
         assert collage is None and panels == 1
         assert case.extraction["automatic_collage"] == {"id": None, "panels": 1, "pending": True}
         assert db.scalars(select(Collage)).all() == []
+
+
+def test_downloaded_sources_are_stored_as_bounded_webp():
+    original = io.BytesIO()
+    Image.new("RGB", (4000, 6000), "#806040").save(original, "PNG")
+    compact = compact_source_image(original.getvalue())
+    with Image.open(io.BytesIO(compact)) as image:
+        assert image.format == "WEBP" and max(image.size) == SOURCE_MAX_EDGE and image.size[0] < image.size[1]
+    assert len(compact) < len(original.getvalue())
+
+
+def test_history_trim_keeps_lasting_events_and_unfinished_runs(archive):
+    factory, settings, _, _ = archive
+    old = NOW - timedelta(days=120)
+    with factory() as db:
+        db.add_all([
+            AuditEvent(entity_type="case", entity_id="x", action="collage_layout_edited", actor="editor", detail={}, created_at=old),
+            AuditEvent(entity_type="case", entity_id="x", action="wordpress_draft_sent", actor="editor", detail={}, created_at=old),
+            AuditEvent(entity_type="case", entity_id="x", action="collage_layout_edited", actor="editor", detail={}, created_at=NOW),
+            JobRun(job_type="edition_refresh", idempotency_key="old-done", status="completed", created_at=old),
+            JobRun(job_type="edition_refresh", idempotency_key="old-queued", status="queued", created_at=old),
+        ])
+        db.commit()
+        settings.history_retention_days = 0
+        assert trim_history(db, settings, now=NOW) == {"audit_events": 0, "job_runs": 0}
+        settings.history_retention_days = 90
+        assert trim_history(db, settings, now=NOW) == {"audit_events": 1, "job_runs": 1}
+        assert {event.action for event in db.scalars(select(AuditEvent)).all()} == {"wordpress_draft_sent", "collage_layout_edited"}
+        assert [run.idempotency_key for run in db.scalars(select(JobRun)).all()] == ["old-queued"]

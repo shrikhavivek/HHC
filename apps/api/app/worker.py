@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
-from .archive import purge_closed_editions
+from .archive import purge_closed_editions, trim_history
 from .automation import run_daily_automation
 from .config import get_settings
 from .database import Base, SessionLocal, engine, get_db
@@ -76,6 +76,7 @@ def maintain_archive(settings):
     try:
         with SessionLocal() as db:
             result = purge_closed_editions(db, settings)
+            result["history"] = trim_history(db, settings)
     except Exception:
         logger.exception("Archive retention failed")
         return

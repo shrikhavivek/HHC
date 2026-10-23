@@ -20,8 +20,12 @@ What shipped, and where it differs from the plan below:
 - **Reference images** are written on approval (the current look and the matched
   earlier look) and on a successful WordPress send. The purge step also backfills
   them for cases that were already approved or sent.
-- **Not done:** evidence ZIPs are still built with each render (they're purged
-  with the edition); version history of a purged case shows missing images; the
+- **Smaller files** (`feature/storage-slimming`): sources are stored as WebP at
+  most 2560 px; a render keeps one WebP plus its two editor previews (no PNG,
+  no copies in the case folder); the evidence ZIP is built on download;
+  `HISTORY_RETENTION_DAYS` trims routine audit events and finished job runs.
+  On a 3-photo test render, stored size went from about 19 MB to about 2 MB.
+- **Not done:** version history of a purged case shows missing images; the
   web app has no "Rendering…" state, so the first open just takes longer.
 
 ## 1. Goal

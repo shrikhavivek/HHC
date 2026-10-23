@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     # Image deletion stays off until the archive backfill has been checked.
     archive_purge_enabled: bool = False
     archive_purge_grace_days: int = 7
+    # Audit events and job runs older than this are deleted; 0 keeps them forever.
+    history_retention_days: int = 0
     scheduler_in_api: bool = True
     instagram_access_token: str = ""
     instagram_account_id: str = ""
@@ -66,6 +68,8 @@ def get_settings() -> Settings:
         raise RuntimeError("Daily automation time must be a valid UTC hour and minute")
     if settings.archive_purge_grace_days < 0:
         raise RuntimeError("ARCHIVE_PURGE_GRACE_DAYS cannot be negative")
+    if settings.history_retention_days < 0:
+        raise RuntimeError("HISTORY_RETENTION_DAYS cannot be negative")
     if bool(settings.reddit_client_id.strip()) != bool(settings.reddit_client_secret.strip()):
         raise RuntimeError("REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET must be configured together")
     return settings

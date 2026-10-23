@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -31,7 +31,7 @@ from .automation import (
     research_case_automation,
     run_daily_automation,
 )
-from .collage import ensure_demo_images, render_bundle, side_by_side_geometry, _instagram_geometry, INSTAGRAM_CANVAS_FORMATS, COLLAGE_LAYOUT_TEMPLATES
+from .collage import bundle_archive, ensure_demo_images, render_bundle, render_urls, side_by_side_geometry, _instagram_geometry, INSTAGRAM_CANVAS_FORMATS, COLLAGE_LAYOUT_TEMPLATES
 from .schemas import LayoutPreviewInput
 from .config import get_settings
 from .database import Base, SessionLocal, engine, get_db
@@ -336,19 +336,16 @@ def get_case(case_id: str, db: Session = Depends(get_db)):
         # Renders of closed editions are purged; the sent copy lives in WordPress.
         data["assets_purged"] = True
         collage = None
-    relative_dir = Path(collage.image_path).resolve().parent.relative_to(Path(settings.output_dir).resolve()).as_posix() if collage else f"case-{case.id}"
-    preview_url = f"/outputs/{relative_dir}/collage.webp"
-    base_preview_path = Path(settings.output_dir) / relative_dir / "collage-base.webp"
-    source_preview_path = Path(settings.output_dir) / relative_dir / "collage-source.webp"
     data["latest_collage"] = None if not collage else {
         "id": collage.id,
-        "preview_url": preview_url,
-        "base_preview_url": f"/outputs/{relative_dir}/collage-base.webp" if base_preview_path.is_file() else preview_url,
-        "source_preview_url": f"/outputs/{relative_dir}/collage-source.webp" if source_preview_path.is_file() else (f"/outputs/{relative_dir}/collage-base.webp" if base_preview_path.is_file() else preview_url),
-        "bundle_url": f"/api/cases/{case.id}/bundle",
+        **collage_urls(collage.image_path, case.id),
         "created_at": collage.created_at.isoformat(),
     }
     return data
+
+
+def collage_urls(image_path: str, case_id: str) -> dict:
+    return render_urls(image_path, settings.output_dir, case_id)
 
 
 @app.post("/api/intake/reddit-url", status_code=201, dependencies=[Depends(require_editor)])
@@ -535,7 +532,7 @@ def create_collage(case_id: str, payload: CollageInput, db: Session = Depends(ge
     db.flush()
     db.add(AuditEvent(entity_type="case", entity_id=case.id, action="collage_generated", actor=decision.editor_id, detail={"collage_id": record.id, "asset_count": len(render_assets), "candidate_ids": [item.id for item in approved_candidates], "custom_layout": bool(saved_panel_ids)}))
     db.commit()
-    return {"id": record.id, "preview_url": f"/outputs/case-{case.id}/collage.webp", "base_preview_url": f"/outputs/case-{case.id}/collage-base.webp", "source_preview_url": f"/outputs/case-{case.id}/collage-source.webp", "bundle_url": f"/api/cases/{case.id}/bundle", "asset_count": len(render_assets), "canvas_format": saved_canvas_format, "layout_template": saved_layout_template}
+    return {"id": record.id, **collage_urls(image_path, case.id), "asset_count": len(render_assets), "canvas_format": saved_canvas_format, "layout_template": saved_layout_template}
 
 
 @app.post("/api/cases/{case_id}/collage/assets", status_code=201, dependencies=[Depends(require_editor)])
@@ -833,10 +830,7 @@ def edit_collage(case_id: str, payload: CollageEditInput, db: Session = Depends(
     db.commit()
     return {
         "id": collage.id,
-        "preview_url": f"/outputs/case-{case.id}/collage.webp",
-        "base_preview_url": f"/outputs/case-{case.id}/collage-base.webp",
-        "source_preview_url": f"/outputs/case-{case.id}/collage-source.webp",
-        "bundle_url": f"/api/cases/{case.id}/bundle",
+        **collage_urls(collage.image_path, case.id),
         "asset_count": len(selected),
         "selected_ids": payload.panel_ids,
         "panel_options": panel_options,
@@ -854,9 +848,10 @@ def download_bundle(case_id: str, db: Session = Depends(get_db)):
     if not case or not case_content_eligible(case):
         raise HTTPException(404, "Case not found")
     collage = db.scalar(select(Collage).where(Collage.case_id == case_id).order_by(Collage.created_at.desc()))
-    if not collage or not os.path.exists(collage.bundle_path):
+    content = bundle_archive(collage.bundle_path) if collage else None
+    if content is None:
         raise HTTPException(404, "No collage bundle exists")
-    return FileResponse(collage.bundle_path, filename=f"case-{case_id}-bundle.zip", media_type="application/zip")
+    return Response(content, media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="case-{case_id}-bundle.zip"'})
 
 
 @app.post("/api/runs/daily", dependencies=[Depends(require_editor)])

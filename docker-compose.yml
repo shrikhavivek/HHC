@@ -62,6 +62,7 @@ services:
       COLLAGE_RENDER_ON_PULL: ${COLLAGE_RENDER_ON_PULL:-false}
       ARCHIVE_PURGE_ENABLED: ${ARCHIVE_PURGE_ENABLED:-false}
       ARCHIVE_PURGE_GRACE_DAYS: ${ARCHIVE_PURGE_GRACE_DAYS:-7}
+      HISTORY_RETENTION_DAYS: ${HISTORY_RETENTION_DAYS:-0}
     ports: ["127.0.0.1:8100:8000"]
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]

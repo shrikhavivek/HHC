@@ -332,6 +332,14 @@ are held for `ARCHIVE_PURGE_GRACE_DAYS` (default 7) after their last change;
 sends that are in progress or uncertain are never purged. Run the worker with
 purge disabled first and check the archive entries before enabling it.
 
+Downloaded source photos are stored as WebP, at most 2560 px on the long edge
+(collages export at most 3 × 1080 px wide). Each collage save keeps one WebP
+render, its two editor previews, the manifest and `sources.md` in its own
+version folder; the evidence ZIP is built when it is downloaded. Set
+`HISTORY_RETENTION_DAYS` (default 0, keep forever) to delete routine audit
+events and finished job runs older than that many days. WordPress sends,
+evidence checks, attribution corrections and purge records are always kept.
+
 ## WordPress
 
 Set `WORDPRESS_SITE_URL` to the site's HTTPS home URL and

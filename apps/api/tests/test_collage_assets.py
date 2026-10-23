@@ -1,5 +1,6 @@
 import io
 import json
+import zipfile
 from pathlib import Path
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -7,9 +8,21 @@ from types import SimpleNamespace
 import pytest
 
 from app.assets import CURRENT_MATCHER_VERSION, build_panel_catalog, build_render_assets, default_panel_ids, normalize_case_assets
+from app import collage as collage_module
 from app.collage import render_bundle
 from app.editor_uploads import store_watermark_image
 from PIL import Image
+
+
+@pytest.fixture(autouse=True)
+def lossless_export(monkeypatch):
+    monkeypatch.setattr(collage_module, "WRITE_LOSSLESS_PNG", True)
+
+
+def _version_dir(tmp_path, case_id="case-1"):
+    """Renders live only in their own version folder."""
+    (version,) = (tmp_path / "output" / f"case-{case_id}" / "versions").iterdir()
+    return version
 
 
 def _case(assets):
@@ -209,9 +222,13 @@ def test_rendered_bundle_contains_today_and_verified_original_panels(tmp_path):
     assert manifest["spacing_px"] == 0
     assert manifest["border_px"] == 0
     assert [item["role"] for item in manifest["assets"]] == ["current_primary", "designer_reference"]
-    assert (tmp_path / "output" / "case-case-1" / "collage.webp").is_file()
-    assert (tmp_path / "output" / "case-case-1" / "collage-base.webp").is_file()
-    assert open(bundle_path, "rb").read(2) == b"PK"
+    assert (_version_dir(tmp_path) / "collage.webp").is_file()
+    assert (_version_dir(tmp_path) / "collage-base.webp").is_file()
+    assert not Path(bundle_path).exists()
+    bundle = collage_module.bundle_archive(bundle_path)
+    assert bundle[:2] == b"PK"
+    with zipfile.ZipFile(io.BytesIO(bundle)) as archive:
+        assert {"collage.webp", "collage-source.webp", "manifest.json", "sources.md"} <= set(archive.namelist())
 
 
 def test_multiple_post_photos_render_into_one_collage_file(tmp_path):
@@ -234,11 +251,11 @@ def test_multiple_post_photos_render_into_one_collage_file(tmp_path):
     assert manifest["layout"] == "edge_to_edge_justified"
     assert manifest["spacing_px"] == 0
     assert manifest["border_px"] == 0
-    assert len(list((tmp_path / "output" / "case-case-1").glob("collage.webp"))) == 1
+    assert len(list(_version_dir(tmp_path).glob("collage.webp"))) == 1
     with Image.open(image_path) as collage:
         assert collage.width == 1800
         assert collage.height > 1000
-    with Image.open(tmp_path / "output" / "case-case-1" / "collage.png") as collage:
+    with Image.open(_version_dir(tmp_path) / "collage.png") as collage:
         # Every outer pixel belongs to a source image: no frame, gutter or
         # caption canvas is introduced by the renderer.
         assert collage.getpixel((0, 0)) != (242, 238, 231)
@@ -326,7 +343,7 @@ def test_panel_width_and_focal_crop_are_applied_and_recorded(tmp_path):
         "caption": "",
         "adjustments": {"brightness": 1.0, "contrast": 1.0, "saturation": 1.0, "grayscale": 0.0},
     }
-    with Image.open(tmp_path / "output" / "case-case-1" / "collage.png") as collage:
+    with Image.open(_version_dir(tmp_path) / "collage.png") as collage:
         # The narrowed first panel ends well before the midpoint, and its
         # right-focused crop displays the blue edge of the source image.
         assert collage.getpixel((300, collage.height // 2)) == (0, 0, 255)
@@ -364,7 +381,7 @@ def test_manual_crop_rectangle_keeps_only_the_selected_source_area(tmp_path):
 
     manifest = json.loads(open(manifest_path, encoding="utf-8").read())
     assert manifest["panel_options"]["current-primary"]["crop_rect"] == crop_rect
-    with Image.open(tmp_path / "output" / "case-case-1" / "collage.png") as collage:
+    with Image.open(_version_dir(tmp_path) / "collage.png") as collage:
         assert collage.size == (1200, 2000)
         assert collage.getpixel((collage.width // 2, collage.height // 2)) == (0, 0, 255)
         assert collage.getpixel((20, collage.height // 2)) == (0, 0, 255)
@@ -455,7 +472,7 @@ def test_watermark_transform_is_rendered_and_recorded_without_changing_base_prev
     assert manifest["watermark"]["rendered_height_px"] == 180
     assert manifest["watermark"]["height"] == 0.1
     assert manifest["watermark"]["opacity"] == 0.5
-    bundle_dir = tmp_path / "output" / "case-case-1"
+    bundle_dir = _version_dir(tmp_path)
     with Image.open(bundle_dir / "collage-base.webp") as base:
         base_pixel = base.convert("RGB").getpixel((base.width // 2, base.height // 2))
         assert base_pixel[0] > 80 and base_pixel[1] < 80
@@ -495,12 +512,12 @@ def test_collage_image_adjustments_are_rendered_and_recorded(tmp_path):
         "saturation": 1.0,
         "grayscale": 0.0,
     }
-    with Image.open(tmp_path / "output" / "case-case-1" / "collage-source.webp") as source:
+    with Image.open(_version_dir(tmp_path) / "collage-source.webp") as source:
         red, green, blue = source.convert("RGB").getpixel((source.width // 2, source.height // 2))
         assert 115 <= red <= 125
         assert 75 <= green <= 85
         assert 35 <= blue <= 45
-    with Image.open(tmp_path / "output" / "case-case-1" / "collage-base.webp") as base:
+    with Image.open(_version_dir(tmp_path) / "collage-base.webp") as base:
         red, green, blue = base.convert("RGB").getpixel((base.width // 2, base.height // 2))
         assert 55 <= red <= 65
         assert 35 <= green <= 45

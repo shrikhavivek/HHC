@@ -22,10 +22,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from .assets import CURRENT_MATCHER_VERSION, build_render_assets
-from .collage import render_bundle
+from .collage import render_bundle, render_urls
 from .designer_search import find_official_designer_reference
 from .models import ArchiveEntry, AuditEvent, Candidate, Case, Collage, Decision, JobRun
-from .public_sources import DuplicatePublicSourceError, PublicSourceError, download_public_images, inspect_public_post, normalized_published_date
+from .public_sources import DuplicatePublicSourceError, PublicSourceError, compact_source_image, download_public_images, inspect_public_post, normalized_published_date
 from .publication_dates import is_current_week
 
 
@@ -1112,16 +1112,21 @@ def _download_image(url: str, media_dir: str, user_agent: str, *, subfolder: str
         _, content, _ = _fetch_limited(url, user_agent=user_agent, allowed_domains=None, source_document=False, maximum_bytes=25 * 1024 * 1024, accept="image/*")
         with Image.open(io.BytesIO(content)) as probe:
             width, height = probe.size
-            image_format = (probe.format or "JPEG").upper()
             probe.verify()
         if width * height > 40_000_000 or width < MIN_SOURCE_IMAGE_EDGE or height < MIN_SOURCE_IMAGE_EDGE:
             return None
-        extension = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp", "GIF": ".gif"}.get(image_format, ".jpg")
-        destination = destination_dir / f"{digest}{extension}"
-        destination.write_bytes(content)
+        destination = destination_dir / f"{digest}.webp"
+        destination.write_bytes(compact_source_image(content))
         return f"/media-files/{subfolder}/{destination.name}"
     except (requests.RequestException, OSError, ValueError, Image.DecompressionBombError):
         return None
+
+
+def _latest_render_urls(db: Session, case: Case, settings) -> dict:
+    collage = db.scalar(select(Collage).where(Collage.case_id == case.id).order_by(Collage.created_at.desc()))
+    if collage is None:
+        return {"preview_url": None, "bundle_url": f"/api/cases/{case.id}/bundle"}
+    return render_urls(collage.image_path, settings.output_dir, case.id)
 
 
 def _download_source_images(urls: list[str], media_dir: str, user_agent: str) -> tuple[list[str], list[str]]:
@@ -2220,8 +2225,7 @@ def import_public_post_automation(db: Session, payload: dict, settings, static_d
             "matches": research.get("matches", 0),
             "canvas_format": _saved_canvas_format(case),
             "layout_template": _saved_layout_template(case),
-            "preview_url": f"/outputs/case-{case.id}/collage.webp",
-            "bundle_url": f"/api/cases/{case.id}/bundle",
+            **_latest_render_urls(db, case, settings),
         }
     except PublicSourceError:
         db.rollback()

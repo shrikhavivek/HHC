@@ -85,7 +85,7 @@ def test_browser_import_auth_duplicate_date_brand_and_image_validation(monkeypat
             assert cases[0].extraction["brand_mentions"][0]["name"] == "Gucci"
             assert cases[0].status == "context_review"
             assert cases[0].extraction["automatic_collage"]["panels"] == 1
-            assert list(Path(tmp_path / "outputs").rglob("*.png"))
+            assert list(Path(tmp_path / "outputs").rglob("collage.webp"))
         feed = client.get("/api/instagram-browser/posts", headers=headers).json()["results"]
         assert len(feed) == 1
         assert feed[0]["brands"] == ["Gucci"]
