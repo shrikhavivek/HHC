@@ -80,7 +80,11 @@ class SupabaseStorage(LocalStorage):
         self.bucket = bucket
         self.signed_seconds = signed_seconds
         self.http = requests.Session()
-        self.http.headers.update({"Authorization": f"Bearer {service_key}", "apikey": service_key})
+        self.http.headers["apikey"] = service_key
+        # Legacy service_role keys are JWTs and go in both headers; new
+        # sb_secret_ keys are not JWTs, so only the apikey header is sent.
+        if not service_key.startswith("sb_"):
+            self.http.headers["Authorization"] = f"Bearer {service_key}"
 
     def ensure_bucket(self) -> None:
         if self._request("GET", f"{self.base}/bucket/{self.bucket}").status_code == 200:

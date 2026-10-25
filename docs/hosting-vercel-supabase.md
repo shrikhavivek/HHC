@@ -36,7 +36,7 @@ paths as before.
 ## Setup
 
 1. **Supabase:** create a project. From *Project Settings*, copy:
-   - the project URL and the `service_role` key;
+   - the project URL and the secret key (`sb_secret_...`, or the legacy `service_role` key);
    - the **transaction pooler** connection string (port 6543) for the API;
    - the **session pooler** connection string (port 5432) for the worker.
 2. **Reddit:** production mode requires Reddit OAuth credentials. Create a
