@@ -56,6 +56,7 @@ from .wordpress import router as wordpress_router
 from .worker import router as worker_router
 from .instagram_browser import router as instagram_browser_router
 from .reddit_gallery import router as reddit_gallery_router, incomplete as reddit_gallery_incomplete
+from .reddit_browser import router as reddit_browser_router
 
 
 settings = get_settings()
@@ -268,6 +269,7 @@ app.include_router(wordpress_router)
 app.include_router(worker_router)
 app.include_router(instagram_browser_router)
 app.include_router(reddit_gallery_router)
+app.include_router(reddit_browser_router)
 
 
 @app.get("/health")

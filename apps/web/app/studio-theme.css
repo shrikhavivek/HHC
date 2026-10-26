@@ -12,6 +12,14 @@
 .studio-content .asset-tile p, .studio-content .asset-tile footer { font-size: 12px; line-height: 1.6; }
 .studio-content .asset-board-grid { grid-template-columns: minmax(0, 1fr); }
 
+/* Let the looks rail follow the full editorial file instead of a fixed cutoff. */
+@media (min-width: 941px) {
+  .studio-content .queue-panel { align-self: stretch; display: flex; flex-direction: column; min-height: 0; }
+  .studio-content .queue-panel > .panel-heading,
+  .studio-content .queue-panel > .filters { flex: 0 0 auto; }
+  .studio-content .case-list { flex: 1 1 0; min-height: 0; max-height: none; contain: size; }
+}
+
 .studio-shell[data-theme=dark] {
   --canvas: #211e22;
   --paper: #2d282f;

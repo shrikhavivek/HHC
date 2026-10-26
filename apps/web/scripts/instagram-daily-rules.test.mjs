@@ -38,3 +38,11 @@ test("comments and suggested-post dates never qualify", () => {
   }
   assert.equal(qualifyPost({ ...post, dates: [...post.dates, { ...post.dates[0], datetime: "2026-10-13T01:00:00Z" }] }, person, brands, now).reason, "date_unverified");
 });
+
+test("explicit clothing credits can identify a new label without accepting unrelated tags", () => {
+  assert.equal(matchedBrands("Outfit: @newfashionlabel", [], brands)[0].name, "@newfashionlabel");
+  assert.equal(matchedBrands("Wearing @newfashionlabel", [], brands).length, 1);
+  assert.equal(matchedBrands("Photos: @newfashionlabel", [], brands).length, 0);
+  assert.equal(matchedBrands("With @friend", [], brands).length, 0);
+  assert.equal(matchedBrands("Wearing @stylist", [], brands).length, 0);
+});

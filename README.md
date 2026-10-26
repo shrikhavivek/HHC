@@ -45,6 +45,55 @@ database connectivity.
 
 ## An editor's workflow
 
+### Sign in to Instagram or Reddit and collect photos
+
+The dashboard has **Sign in to Instagram & collect photos** and
+**Sign in to Reddit & collect photos** buttons. Each opens a dedicated Edge
+window on the Windows computer running the local collector. Enter credentials
+directly on the provider website and complete any verification there. Collection
+continues automatically after sign-in; keep the source window open. The dashboard
+shows sign-in and capture progress and refreshes as posts arrive. Credentials and
+cookies remain in the separate local browser profiles, outside Docker and Git.
+If a Reddit page fails to load, its window stays open and the dashboard shows
+**Check the Reddit window**. Refresh or complete sign-in on Reddit yourself;
+collection resumes when the requested page becomes available. Navigation is not
+retried automatically. If the wait expires or another collection error occurs,
+the window stays open for inspection until you close it, then you can start again.
+
+With Docker running, install web dependencies and the request launcher once:
+
+```powershell
+cd apps/web
+npm ci
+& ./scripts/install-browser-task.ps1
+```
+
+The **HHC Browser Requests** task starts immediately and at Windows sign-in.
+It only opens source windows after an editor presses a collection button; it
+does not schedule daily scans. The installer retires the older **HHC Instagram
+Requests** launcher to prevent duplicate collectors. The Windows user must be
+signed in and the computer awake. Remote browsers cannot launch Edge on their
+own computers through this local setup; windows open on the collector computer.
+
+Instagram scans every enabled watchlist account; Reddit scans the configured
+subreddit's chronological `/new` listing. Each keeps a separate listing tab and
+continues scrolling beyond the former 12/24-post limits. Six consecutive dated,
+unpinned older posts establish the observed date boundary; the whole loaded batch
+is inspected before stopping so pinned or reordered items cannot hide another
+recent item in that batch. This is best-effort coverage of the source's exposed
+ordering, not a guarantee about hidden, removed or arbitrarily reordered posts.
+
+The dashboard records the India-time date window as of scan start, per-source
+coverage, qualifying posts, saved posts, duplicates and unresolved failures.
+Unreadable dates, failed captures, blocked pages and feeds that stop loading
+remain incomplete. A safety stop at 200 scrolls or 45 minutes per source is also
+incomplete, never a successful truncation. Rerun to reconcile new arrivals or gaps;
+posts published after scan start belong to the next scan. Existing complete
+carousels are reused, and incomplete Reddit galleries require their original edit
+revision before expansion. Instagram's recent-photo feed no longer truncates at
+100 posts. Brand/designer credits are required; reels and videos are excluded.
+Captured drafts still need rights and attribution review before WordPress handoff.
+
 1. Open **Sources & schedule** to see credentials, worker status, cooldowns
    and recent runs. **Refresh now** queues work without blocking the page.
 2. Open a source case. Correct the person, designer, event or date when necessary.
@@ -197,10 +246,12 @@ when available. No elevated account or saved Windows password is needed. Pause
 intake in the dashboard, or disable the task with
 `Disable-ScheduledTask -TaskName 'HHC Instagram Daily'`.
 
-Each scan is bounded to two profile scrolls and up to 12 photo-post links per
-account; pinned posts do not stop date inspection of other collected links. Reels,
+Each scan continues through the today/yesterday date window for each enabled
+account; pinned posts do not establish the older-post boundary. Reels,
 videos, unknown dates, future dates, dates before yesterday, mismatched authors and
-unrecognized brand mentions are excluded. Only a timestamp linked to the actual
+unrecognized brand mentions without explicit clothing credits are excluded. A
+registry match or an explicit clothing credit such as `Outfit: @label` qualifies;
+unlabelled mentions of friends or photographers do not. Only a timestamp linked to the actual
 post permalink qualifies, not a comment date. A screenshot is cropped to an image
 matching the post's own Open Graph cover; suggested-post photos are not fallback
 sources. Photo slides are captured from the same carousel. Tags are used only
@@ -348,6 +399,11 @@ Experimental free-tier setup: see `docs/hosting-vercel-supabase.md`.
 
 Set `WORDPRESS_SITE_URL` to the site's HTTPS home URL and
 `WORDPRESS_PUBLISHER_ENABLED=true` to allow explicit draft handoffs.
+The example configuration enables this setting. Existing installations must
+update their local `.env` if it still contains `WORDPRESS_PUBLISHER_ENABLED=false`,
+then apply it with `docker compose up -d --no-deps api` and refresh the dashboard.
+A disabled setting prevents the **Continue to WordPress** button from opening
+sign-in. Keep `.env` and credentials local; only `.env.example` belongs in Git.
 After reviewing the story, **Continue to WordPress** redirects to the
 site's own WordPress sign-in/authorization page. Use the normal WordPress login
 there and approve the studio connection. A progress page creates the draft and
