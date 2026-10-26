@@ -365,6 +365,11 @@ can retry. The app needs to remain running for daily refresh to occur.
 
 Set `WORDPRESS_SITE_URL` to the site's HTTPS home URL and
 `WORDPRESS_PUBLISHER_ENABLED=true` to allow explicit draft handoffs.
+The example configuration enables this setting. Existing installations must
+update their local `.env` if it still contains `WORDPRESS_PUBLISHER_ENABLED=false`,
+then apply it with `docker compose up -d --no-deps api` and refresh the dashboard.
+A disabled setting prevents the **Continue to WordPress** button from opening
+sign-in. Keep `.env` and credentials local; only `.env.example` belongs in Git.
 After reviewing the story, **Continue to WordPress** redirects to the
 site's own WordPress sign-in/authorization page. Use the normal WordPress login
 there and approve the studio connection. A progress page creates the draft and
