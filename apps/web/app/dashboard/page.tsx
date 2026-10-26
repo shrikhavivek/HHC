@@ -10,6 +10,7 @@ import { CollageLayoutPreview, useLayoutPreviews } from "@/components/collage-la
 import { MatchVerification } from "@/components/match-verification";
 import { OutfitContext } from "@/components/outfit-context";
 import { InstagramWatchlist } from "@/components/instagram-watchlist";
+import { BrowserSourceControls } from "@/components/browser-source-controls";
 import { useUndoHistory } from "@/lib/use-undo-history";
 
 type WorkspaceView = "today" | "women" | "men" | "both" | "pending" | "reviewed";
@@ -1402,6 +1403,7 @@ export default function DashboardPage() {
 
       <EditorialDesk ref={editorialDesk} selected={selected} username={profile?.username || ""} resumeStep={resumeStep} onResumeHandled={() => setResumeStep(null)} onEditCollage={openCollageEditor} onRefresh={() => { if (showCollageEditor || showIntake || decisionMode) return; if (selected) void openCase(selected.id); void load(); }}/>
       {selected?.demo_data && <p className="edition-message">Demonstration case and placeholder photographs. Connect a source in Sources &amp; schedule to prepare real editorial images.</p>}
+      <BrowserSourceControls onCollected={load}/>
       <InstagramWatchlist onOpen={async caseId => { setWorkspaceView("today"); setFilter("all"); setSearch(""); await load(); await openCase(caseId); }}/>
       <div className="workbench-heading"><div><span className="workbench-kicker">THE EDITORIAL DESK</span><h2>The working edit.</h2></div><p>Instagram &amp; Reddit: today &amp; yesterday · Websites: current week<span>Publication dates · Asia/Kolkata</span></p></div>
       <section className="workspace studio-workspace" id="daily-looks" tabIndex={-1} aria-label="Daily looks">

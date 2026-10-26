@@ -39,6 +39,8 @@ def test_brand_evidence_is_not_any_mention():
     assert browser.brand_mentions("My look", ["gucci"], brands)
     assert not browser.brand_mentions("@guccifan @stylist", [], brands)
     assert not browser.brand_mentions("Guccified", [], brands)
+    assert browser.brand_mentions("Outfit: @newfashionlabel", [], brands)[0]["name"] == "@newfashionlabel"
+    assert not browser.brand_mentions("Photos: @newfashionlabel", [], brands)
 
 
 def test_unwatched_old_video_and_no_brand_posts_are_rejected():
@@ -113,6 +115,16 @@ def browser_client():
     finally:
         main.app.dependency_overrides.pop(get_db, None)
         engine.dispose()
+
+
+def test_recent_feed_does_not_hide_posts_after_first_hundred(browser_client, monkeypatch, tmp_path):
+    client, headers, engine = browser_client
+    monkeypatch.setattr(browser, "get_settings", lambda: SimpleNamespace(reddit_daily_timezone="Asia/Kolkata", media_dir=str(tmp_path), output_dir=str(tmp_path / "outputs")))
+    with Session(engine) as db:
+        for index in range(105):
+            db.add(Case(source_type="public_post_url", external_id=f"instagram-browser:feed{index}", permalink=f"https://www.instagram.com/p/feed{index}/", source_title="Kriti Sanon in Gucci", celebrity="Kriti Sanon", extraction={"published_at": datetime.now(timezone.utc).isoformat(), "brand_mentions": [{"name": "Gucci"}]}))
+        db.commit()
+    assert len(client.get("/api/instagram-browser/posts", headers=headers).json()["results"]) == 105
 
 
 @pytest.mark.parametrize("legacy", [False, True])

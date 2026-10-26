@@ -21,6 +21,7 @@ from .models import AuditEvent, Case, Collage, ServiceState, StoryDraft
 from .assets import build_render_assets
 from .publication_dates import is_recent_post, publication_stamp
 from .security import current_actor
+from .browser_coverage import CoverageReport
 
 router = APIRouter(prefix="/api/instagram-browser")
 CONFIG_KEY = "instagram-browser:config"
@@ -108,6 +109,12 @@ def brand_mentions(caption, tags, brands):
                 evidence.append(alias)
         if evidence:
             matches.append({"name": brand.name, "evidence": sorted(set(evidence))})
+    for handle in re.findall(r"\b(?:wearing|dressed\s+in|(?:outfit|dress|saree|sari|gown|suit|jacket|clothing|designer|brand)\s*(?::|by|from))\s*@([A-Za-z0-9._]{1,30})\b", caption, re.I):
+        if re.search(r"stylist|photograph|makeup|hairstyl|^mua$", handle, re.I):
+            continue
+        evidence = f"@{handle}"
+        if not any(evidence.casefold() in {item.casefold() for item in match["evidence"]} for match in matches):
+            matches.append({"name": evidence, "evidence": [evidence, "Explicit clothing credit in caption; attribution needs review"]})
     return matches
 
 
@@ -216,7 +223,7 @@ def claim_scan(db: Session = Depends(get_db)):
 
 @router.get("/posts")
 def recent_posts(db: Session = Depends(get_db)):
-    cases = db.scalars(select(Case).where(Case.external_id.like("instagram-browser:%")).order_by(Case.created_at.desc()).limit(500)).all()
+    cases = db.scalars(select(Case).where(Case.external_id.like("instagram-browser:%")).order_by(Case.created_at.desc())).all()
     results = []
     for case in cases:
         extraction = case.extraction or {}
@@ -228,21 +235,22 @@ def recent_posts(db: Session = Depends(get_db)):
                 "photo_count": carousel.get("photo_count", 1), "carousel_complete": carousel.get("complete", False),
                 "permalink": case.permalink, "published_at": extraction["published_at"], "brands": [item["name"] for item in extraction.get("brand_mentions", [])]})
     results.sort(key=lambda item: item["published_at"], reverse=True)
-    return {"results": results[:100]}
+    return {"results": results}
 
 
 class RunReport(BaseModel):
     run_id: str = Field(pattern=r"^[a-zA-Z0-9-]{1,64}$")
     status: str = Field(pattern=r"^(awaiting_login|running|completed|partial|blocked|failed|paused|cancelled)$")
     accounts_checked: int = Field(default=0, ge=0, le=200)
-    posts_checked: int = Field(default=0, ge=0, le=2400)
-    imported: int = Field(default=0, ge=0, le=2400)
-    updated: int = Field(default=0, ge=0, le=2400)
+    posts_checked: int = Field(default=0, ge=0, le=1000000)
+    imported: int = Field(default=0, ge=0, le=1000000)
+    updated: int = Field(default=0, ge=0, le=1000000)
     detail: str = Field(default="", max_length=1000)
     exclusions: dict[str, int] = Field(default_factory=dict, max_length=20)
     current_account: str = Field(default="", max_length=180)
     accounts_total: int = Field(default=0, ge=0, le=200)
     dry_run: bool = False
+    coverage: CoverageReport | None = None
 
 
 @router.post("/runs")
