@@ -22,6 +22,8 @@ from .publication_dates import is_recent_post, publication_stamp
 from .reddit_gallery import GalleryInput, apply_recovery
 from .security import current_actor
 from .browser_coverage import CoverageReport
+from .storage import get_storage
+from .uploads import staged_uploads
 
 router = APIRouter(prefix="/api/reddit-browser")
 RUN_KEY = "reddit-browser:run"
@@ -128,7 +130,10 @@ class BrowserPost(BaseModel):
 
 
 @router.post("/posts")
-async def import_post(metadata: str = Form(..., max_length=20000), images: list[UploadFile] = File(...), db: Session = Depends(get_db)):
+async def import_post(metadata: str = Form(..., max_length=20000), images: list[UploadFile] = File(default=[]),
+        upload_keys: str = Form(""), db: Session = Depends(get_db)):
+    # Hosted setups send storage keys instead of files (4.5 MB request cap).
+    images = images or staged_uploads(upload_keys)
     settings = get_settings()
     paths = []
     retained = False
@@ -182,7 +187,7 @@ async def import_post(metadata: str = Form(..., max_length=20000), images: list[
         db.add(case)
         db.flush()
         _sync_current_post_images(case, {"permalink": payload.permalink, "author": payload.author, "image_urls": payload.images, "gallery_expanded": True}, paths, datetime.now(timezone.utc).isoformat())
-        collage = render_draft_collage(db, case, [], settings, str(Path(__file__).parent / "static"), editor_id=current_actor())
+        collage = render_draft_collage(db, case, [], settings, getattr(settings, "static_dir", "") or str(Path(__file__).parent / "static"), editor_id=current_actor())
         case.extraction = {**case.extraction, "automatic_collage": {"id": collage.id, "panels": len(paths)}}
         db.add(AuditEvent(entity_type="case", entity_id=case.id, action="reddit_browser_imported", actor=current_actor(), detail={"photo_count": len(paths)}))
         db.commit()
@@ -199,4 +204,4 @@ async def import_post(metadata: str = Form(..., max_length=20000), images: list[
             await image.close()
         if not retained:
             for path in paths:
-                (Path(settings.media_dir) / "editor" / Path(path).name).unlink(missing_ok=True)
+                get_storage().delete(Path(settings.media_dir) / "editor" / Path(path).name)

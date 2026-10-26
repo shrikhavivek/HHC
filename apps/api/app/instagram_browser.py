@@ -367,7 +367,7 @@ async def import_post(metadata: str = Form(..., max_length=15000), image: Upload
             candidates = [candidate for candidate in case.candidates if candidate.status != "automation_draft_anchor"]
             panel_count = len(build_render_assets(case, candidates, include_automation_matches=True, panel_ids=edit.get("panel_ids")))
             if getattr(settings, "collage_render_on_pull", False):
-                collage = render_draft_collage(db, case, candidates, settings, str(Path(__file__).parent / "static"),
+                collage = render_draft_collage(db, case, candidates, settings, getattr(settings, "static_dir", "") or str(Path(__file__).parent / "static"),
                     reason="Photos captured from the same browser-observed Instagram carousel. Brand attribution, outfit identity and publication rights require review.")
                 case.extraction = {**case.extraction, "automatic_collage": {"id": collage.id, "panels": panel_count}}
             else:

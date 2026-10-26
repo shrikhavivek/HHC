@@ -15,7 +15,7 @@ export async function pollProvider(provider, api, launch, running) {
 }
 
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
-  const { request } = await import("./browser-local-api.mjs");
+  const { request, pollMilliseconds } = await import("./browser-local-api.mjs");
   const children = new Map();
   const running = new Set();
   let stopping = false;
@@ -32,6 +32,6 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
   });
   while (!stopping) {
     await Promise.allSettled(["instagram", "reddit"].map(provider => pollProvider(provider, request, launch, running)));
-    if (!stopping) await delay(3000);
+    if (!stopping) await delay(pollMilliseconds);
   }
 }

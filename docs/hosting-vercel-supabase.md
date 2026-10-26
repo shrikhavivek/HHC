@@ -15,6 +15,7 @@ Vercel deployment. Docker Compose still works unchanged (`STORAGE_BACKEND=local`
 | Hourly worker | GitHub Actions (`.github/workflows/worker.yml`) | Runs at :35 every hour; can be started from "Refresh now" |
 | Instagram collector | Your computer | Set `HHC_API_URL` to the API's Vercel URL |
 | Reddit gallery recovery | Your computer | Same `HHC_API_URL`; screenshots go straight to the bucket |
+| "Sign in & collect photos" buttons | A Windows computer running **HHC Browser Requests** | Same `HHC_API_URL`; the Edge window opens on that computer, not the editor's |
 
 ## How files work
 
