@@ -80,3 +80,25 @@ def test_title_first_rule_repairs_old_automatic_mixed_label():
     case = SimpleNamespace(celebrity="Shloka Ambani", source_title="Shloka Ambani in Abu Jani Sandeep Khosla",
                            source_body="", extraction={"fashion_category": "mixed"})
     assert case_fashion_category(case) == "women"
+
+
+def test_watchlist_men_are_routed_to_the_mens_desk():
+    assert classify_fashion_category("Abhishek Bachchan", "Abhishek Bachchan in Kunal Rawal") == "men"
+    assert classify_fashion_category("Tiger Shroff") == "men"
+    assert classify_fashion_category("", "Anushka Sharma and Virat at the airport") == "women"
+
+
+def test_every_watchlist_person_has_a_desk():
+    import json
+    from pathlib import Path
+    from app.fashion_category import KNOWN_MEN, KNOWN_WOMEN, _canonical
+    watchlist = json.loads((Path(__file__).parents[1] / "app" / "instagram_watchlist.json").read_text(encoding="utf-8"))
+    missing = [person["name"] for person in watchlist if _canonical(person["name"]) not in KNOWN_MEN | KNOWN_WOMEN]
+    assert not missing
+
+
+def test_clothing_files_posts_without_a_recognised_person():
+    assert classify_fashion_category("", "At the sangeet in a Sabyasachi sherwani") == "men"
+    assert classify_fashion_category("", "Newcomer in an ivory Tarun Tahiliani lehenga") == "women"
+    assert classify_fashion_category("", "The newlyweds in a matching sherwani and lehenga") == "mixed"
+    assert classify_fashion_category("", "Street style at the premiere") == "unclassified"
