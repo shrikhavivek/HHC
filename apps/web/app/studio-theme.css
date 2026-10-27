@@ -74,6 +74,8 @@
 .studio-shell[data-theme=dark] :is(.skeleton-case > i, .skeleton-case b) { background-image: linear-gradient(90deg, #302832, #44343f, #302832); }
 
 .studio-shell[data-theme=dark] :is(.collage-context-panel, .collage-filter-panel, .editor-upload-panel, .collage-context-content > section, .available-panel-grid article, .collage-editor-modal > footer, .crop-mode-control > div, .category-editor > div) { background: var(--canvas); color: var(--ink); border-color: var(--line); }
+/* The sticky verdict bar sits on the page canvas, so it matches it instead of a light strip. */
+.studio-shell[data-theme=dark] .action-bar { background: rgba(33,30,34,.94); border-top-color: var(--line); box-shadow: 0 -12px 30px rgba(0,0,0,.18); }
 .studio-shell[data-theme=dark] :is(.collage-context-panel, .collage-filter-panel, .watermark-editor-panel, .editor-upload-panel) > summary { background: var(--paper); color: var(--ink); border-color: var(--line); }
 .studio-shell[data-theme=dark] :is(.collage-context-panel, .collage-filter-panel, .watermark-editor-panel, .editor-upload-panel) > summary > span { color: var(--wine); }
 .studio-shell[data-theme=dark] :is(.collage-context-content section > header, .collage-archive-list article, .collage-rights-list article, .watermark-filter-section, .collage-filter-preview, .watermark-empty) { border-color: var(--line); }
