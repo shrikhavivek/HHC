@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { apiRootFrom, stagePhotos } from "./staged-photos.mjs";
 
 let environment = {};
-try { environment = parseEnv(await readFile(fileURLToPath(new URL("../../../.env", import.meta.url)), "utf8")); } catch {}
+try { environment = parseEnv(await readFile(process.env.HHC_ENV_FILE || fileURLToPath(new URL("../../../.env", import.meta.url)), "utf8")); } catch {}
 const apiKey = process.env.EDITOR_API_KEY || environment.EDITOR_API_KEY || (environment.APP_ENV === "production" ? "" : "local-editor-key");
 if (!apiKey) throw new Error("Configure the local API editor key before starting the collector.");
 const apiRoot = apiRootFrom(environment);
