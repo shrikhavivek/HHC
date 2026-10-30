@@ -1,3 +1,4 @@
+import os
 from datetime import date, datetime, timezone
 from types import SimpleNamespace
 
@@ -387,7 +388,7 @@ def test_single_source_still_creates_an_automatic_draft(tmp_path):
         decision,
         media_dir=str(media_dir),
     )
-    assert (tmp_path / "output" / "case-automatic-case" / "collage.webp").is_file()
+    assert os.path.isfile(image_path)
     assert image_path.endswith("collage.webp")
 
 

@@ -8,6 +8,7 @@ from .config import get_settings
 from .collage import ensure_demo_images
 from .database import SessionLocal
 from .models import Case, Candidate, Collage, AuditEvent
+from .storage import get_storage
 
 
 def main():
@@ -25,6 +26,7 @@ def main():
                 continue
             latest = db.scalar(select(Collage).where(Collage.case_id == case_id).order_by(Collage.created_at.desc()))
             try:
+                get_storage().ensure(latest.manifest_path)
                 manifest = json.loads(Path(latest.manifest_path).read_text())
                 if manifest.get('renderer_style') == 'edge_to_edge_v2':
                     continue

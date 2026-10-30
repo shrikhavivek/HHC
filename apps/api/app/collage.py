@@ -2,13 +2,14 @@ import json
 import math
 import zipfile
 import uuid
-import shutil
+import io
 from pathlib import Path
 from typing import Sequence
 
 from PIL import Image, ImageDraw, ImageEnhance, ImageFont, ImageOps
 
 from .assets import build_render_assets
+from .storage import get_storage
 from .photo_controls import prepare_photo, caption_panel
 
 
@@ -29,6 +30,58 @@ def _font(size: int, bold: bool = False):
         return ImageFont.truetype(path, size)
     except OSError:
         return ImageFont.load_default()
+
+
+BUNDLE_NAME = "bundle.zip"
+# A lossless copy is several times the WebP size; pixel-exact tests turn it on.
+WRITE_LOSSLESS_PNG = False
+BUNDLE_FILES = ["collage.webp", "collage.png", "collage-source.webp", "manifest.json", "sources.md"]
+
+
+def bundle_archive(bundle_path: str) -> bytes | None:
+    """Zip a render's files for download; older renders may still have a stored ZIP."""
+    storage = get_storage()
+    path = Path(bundle_path)
+    if storage.ensure(path):
+        return path.read_bytes()
+    version_dir = path.parent
+    if not storage.ensure(version_dir / "manifest.json"):
+        return None
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name in BUNDLE_FILES:
+            if (name == "collage.png" and not (version_dir / name).is_file()) or not storage.ensure(version_dir / name):
+                continue
+            archive.write(version_dir / name, arcname=name)
+    return output.getvalue()
+
+
+def bundle_download_url(bundle_path: str) -> str | None:
+    """Remote storage: keep the ZIP beside its render and hand out a signed link.
+
+    Serverless responses are capped at 4.5 MB, so large ZIPs cannot be streamed.
+    """
+    storage = get_storage()
+    path = Path(bundle_path)
+    if not storage.exists(path):
+        content = bundle_archive(bundle_path)
+        if content is None:
+            return None
+        path.write_bytes(content)
+        storage.saved(path)
+    return storage.signed_url(path)
+
+
+def render_urls(image_path: str, output_dir: str, case_id: str) -> dict:
+    """Preview links for one render, served from its own version folder."""
+    version_dir = Path(image_path).resolve().parent
+    relative_dir = version_dir.relative_to(Path(output_dir).resolve()).as_posix()
+    preview_url = f"/outputs/{relative_dir}/collage.webp"
+    # Every render writes both previews; only old local renders may lack them.
+    present = (lambda name: True) if get_storage().remote else (lambda name: (version_dir / name).is_file())
+    base_preview_url = f"/outputs/{relative_dir}/collage-base.webp" if present("collage-base.webp") else preview_url
+    source_preview_url = f"/outputs/{relative_dir}/collage-source.webp" if present("collage-source.webp") else base_preview_url
+    return {"preview_url": preview_url, "base_preview_url": base_preview_url, "source_preview_url": source_preview_url, "bundle_url": f"/api/cases/{case_id}/bundle"}
 
 
 def ensure_demo_images(static_dir: str):
@@ -69,7 +122,7 @@ def _open_local_asset(static_dir: str, image_path: str, media_dir: str | None = 
     path = (root / relative).resolve()
     if root not in path.parents and path != root:
         raise FileNotFoundError(f"Collage asset path is not allowed: {image_path}")
-    if not path.is_file():
+    if not (path.is_file() if root == Path(static_dir).resolve() else get_storage().ensure(path)):
         raise FileNotFoundError(f"Collage asset has not been imported: {image_path}")
     return Image.open(path)
 
@@ -652,9 +705,10 @@ def render_bundle(
     canvas.save(base_webp_path, quality=90, method=6)
     rendered_canvas, watermark_manifest = _apply_watermark(canvas, static_dir, media_dir, watermark_options)
 
-    png_path, webp_path = bundle_dir / "collage.png", bundle_dir / "collage.webp"
-    rendered_canvas.save(png_path, optimize=True)
+    webp_path = bundle_dir / "collage.webp"
     rendered_canvas.save(webp_path, quality=92, method=6)
+    if WRITE_LOSSLESS_PNG:
+        rendered_canvas.save(bundle_dir / "collage.png", optimize=True)
 
     manifest = {
         "case_id": case.id,
@@ -745,17 +799,12 @@ def render_bundle(
     )
     (bundle_dir / "sources.md").write_text("\n".join(source_lines), encoding="utf-8")
 
-    zip_path = bundle_dir / "bundle.zip"
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as archive:
-        for name in ["collage.png", "collage.webp", "collage-source.webp", "manifest.json", "sources.md"]:
-            archive.write(bundle_dir / name, arcname=name)
     if rendered_canvas is not canvas:
         rendered_canvas.close()
     canvas.close()
-    # Compatibility previews remain available; the database always references
-    # immutable version files so later renders cannot rewrite editorial history.
-    for source in bundle_dir.iterdir():
-        temporary = case_dir / f".{uuid.uuid4().hex}.tmp"
-        shutil.copyfile(source, temporary)
-        temporary.replace(case_dir / source.name)
+    # Each version lives only in its own folder; the evidence ZIP is built on
+    # download (bundle_archive) instead of being stored with every render.
+    for written in bundle_dir.iterdir():
+        get_storage().saved(written)
+    zip_path = bundle_dir / BUNDLE_NAME
     return str(webp_path), str(manifest_path), str(zip_path)

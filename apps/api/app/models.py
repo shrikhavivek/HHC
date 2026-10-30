@@ -132,3 +132,17 @@ class StoryDraft(Base):
     wordpress_site: Mapped[str | None] = mapped_column(Text, nullable=True)
     sync_state: Mapped[str] = mapped_column(String(40), default="not_sent")
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
+
+
+class ArchiveEntry(Base):
+    """Text record of a case that outlives its source images."""
+    __tablename__ = "archive_entries"
+    case_id: Mapped[str] = mapped_column(ForeignKey("cases.id", ondelete="CASCADE"), primary_key=True)
+    permalink: Mapped[str] = mapped_column(Text)
+    keywords: Mapped[list] = mapped_column(JSON, default=list)
+    signature: Mapped[dict] = mapped_column(JSON, default=dict)
+    fingerprint: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    reference_image: Mapped[str | None] = mapped_column(Text, nullable=True)
+    wordpress_media_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)

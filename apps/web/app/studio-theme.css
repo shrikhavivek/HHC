@@ -12,6 +12,14 @@
 .studio-content .asset-tile p, .studio-content .asset-tile footer { font-size: 12px; line-height: 1.6; }
 .studio-content .asset-board-grid { grid-template-columns: minmax(0, 1fr); }
 
+/* Let the looks rail follow the full editorial file instead of a fixed cutoff. */
+@media (min-width: 941px) {
+  .studio-content .queue-panel { align-self: stretch; display: flex; flex-direction: column; min-height: 0; }
+  .studio-content .queue-panel > .panel-heading,
+  .studio-content .queue-panel > .filters { flex: 0 0 auto; }
+  .studio-content .case-list { flex: 1 1 0; min-height: 0; max-height: none; contain: size; }
+}
+
 .studio-shell[data-theme=dark] {
   --canvas: #211e22;
   --paper: #2d282f;
@@ -66,6 +74,8 @@
 .studio-shell[data-theme=dark] :is(.skeleton-case > i, .skeleton-case b) { background-image: linear-gradient(90deg, #302832, #44343f, #302832); }
 
 .studio-shell[data-theme=dark] :is(.collage-context-panel, .collage-filter-panel, .editor-upload-panel, .collage-context-content > section, .available-panel-grid article, .collage-editor-modal > footer, .crop-mode-control > div, .category-editor > div) { background: var(--canvas); color: var(--ink); border-color: var(--line); }
+/* The sticky verdict bar sits on the page canvas, so it matches it instead of a light strip. */
+.studio-shell[data-theme=dark] .action-bar { background: rgba(33,30,34,.94); border-top-color: var(--line); box-shadow: 0 -12px 30px rgba(0,0,0,.18); }
 .studio-shell[data-theme=dark] :is(.collage-context-panel, .collage-filter-panel, .watermark-editor-panel, .editor-upload-panel) > summary { background: var(--paper); color: var(--ink); border-color: var(--line); }
 .studio-shell[data-theme=dark] :is(.collage-context-panel, .collage-filter-panel, .watermark-editor-panel, .editor-upload-panel) > summary > span { color: var(--wine); }
 .studio-shell[data-theme=dark] :is(.collage-context-content section > header, .collage-archive-list article, .collage-rights-list article, .watermark-filter-section, .collage-filter-preview, .watermark-empty) { border-color: var(--line); }

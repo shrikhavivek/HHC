@@ -22,11 +22,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from .assets import CURRENT_MATCHER_VERSION, build_render_assets
-from .collage import render_bundle
+from .collage import render_bundle, render_urls
 from .designer_search import find_official_designer_reference
-from .models import AuditEvent, Candidate, Case, Collage, Decision, JobRun
-from .public_sources import DuplicatePublicSourceError, PublicSourceError, download_public_images, inspect_public_post, normalized_published_date
+from .models import ArchiveEntry, AuditEvent, Candidate, Case, Collage, Decision, JobRun
+from .public_sources import DuplicatePublicSourceError, PublicSourceError, compact_source_image, download_public_images, inspect_public_post, normalized_published_date
 from .publication_dates import is_current_week
+from .storage import get_storage
 
 
 BLOCKED_TITLE_PREFIXES = ("[request]", "id this", "who is", "weekly thread")
@@ -1107,21 +1108,29 @@ def _download_image(url: str, media_dir: str, user_agent: str, *, subfolder: str
     for existing in destination_dir.glob(f"{digest}.*"):
         if _usable_image_file(existing):
             return f"/media-files/{subfolder}/{existing.name}"
+    if get_storage().remote and get_storage().exists(destination_dir / f"{digest}.webp"):
+        return f"/media-files/{subfolder}/{digest}.webp"
     try:
         from .public_sources import _fetch_limited
         _, content, _ = _fetch_limited(url, user_agent=user_agent, allowed_domains=None, source_document=False, maximum_bytes=25 * 1024 * 1024, accept="image/*")
         with Image.open(io.BytesIO(content)) as probe:
             width, height = probe.size
-            image_format = (probe.format or "JPEG").upper()
             probe.verify()
         if width * height > 40_000_000 or width < MIN_SOURCE_IMAGE_EDGE or height < MIN_SOURCE_IMAGE_EDGE:
             return None
-        extension = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp", "GIF": ".gif"}.get(image_format, ".jpg")
-        destination = destination_dir / f"{digest}{extension}"
-        destination.write_bytes(content)
+        destination = destination_dir / f"{digest}.webp"
+        destination.write_bytes(compact_source_image(content))
+        get_storage().saved(destination)
         return f"/media-files/{subfolder}/{destination.name}"
     except (requests.RequestException, OSError, ValueError, Image.DecompressionBombError):
         return None
+
+
+def _latest_render_urls(db: Session, case: Case, settings) -> dict:
+    collage = db.scalar(select(Collage).where(Collage.case_id == case.id).order_by(Collage.created_at.desc()))
+    if collage is None:
+        return {"preview_url": None, "bundle_url": f"/api/cases/{case.id}/bundle"}
+    return render_urls(collage.image_path, settings.output_dir, case.id)
 
 
 def _download_source_images(urls: list[str], media_dir: str, user_agent: str) -> tuple[list[str], list[str]]:
@@ -1380,12 +1389,18 @@ def _image_descriptor(path: Path) -> tuple[list[float], int] | None:
         return None
 
 
-def _local_media_path(image_path: str, media_dir: str) -> Path | None:
-    if not image_path.startswith("/media-files/"):
+def _media_file(image_path: str, media_dir: str) -> Path | None:
+    """Where a /media-files/ path lives under MEDIA_DIR, whether or not it is cached."""
+    if not isinstance(image_path, str) or not image_path.startswith("/media-files/"):
         return None
     root = Path(media_dir).resolve()
     path = (root / image_path.removeprefix("/media-files/")).resolve()
-    return path if root in path.parents and path.is_file() else None
+    return path if root in path.parents else None
+
+
+def _local_media_path(image_path: str, media_dir: str) -> Path | None:
+    path = _media_file(image_path, media_dir)
+    return path if path and get_storage().ensure(path) else None
 
 
 def _usable_media_asset(image_path: str, media_dir: str) -> bool:
@@ -1393,17 +1408,36 @@ def _usable_media_asset(image_path: str, media_dir: str) -> bool:
     return bool(path and _usable_image_file(path))
 
 
+def image_fingerprint(image_path: str, media_dir: str) -> dict | None:
+    """Text form of the matcher's descriptor, kept after the image is purged."""
+    path = _local_media_path(image_path, media_dir)
+    descriptor = _image_descriptor(path) if path else None
+    return {"histogram": descriptor[0], "dhash": descriptor[1]} if descriptor else None
+
+
+def _descriptor_similarity(left: tuple[list[float], int] | None, right: tuple[list[float], int] | None) -> float:
+    if not left or not right:
+        return 0.0
+    histogram_score = max(0.0, min(1.0, _cosine(left[0], right[0])))
+    hash_score = 1 - ((left[1] ^ right[1]).bit_count() / 64)
+    return round(histogram_score * 0.68 + hash_score * 0.32, 4)
+
+
 def _visual_similarity(left_path: str, right_path: str, media_dir: str) -> float:
     left = _local_media_path(left_path, media_dir)
     right = _local_media_path(right_path, media_dir)
     if not left or not right:
         return 0.0
-    left_descriptor, right_descriptor = _image_descriptor(left), _image_descriptor(right)
-    if not left_descriptor or not right_descriptor:
-        return 0.0
-    histogram_score = max(0.0, min(1.0, _cosine(left_descriptor[0], right_descriptor[0])))
-    hash_score = 1 - ((left_descriptor[1] ^ right_descriptor[1]).bit_count() / 64)
-    return round(histogram_score * 0.68 + hash_score * 0.32, 4)
+    return _descriptor_similarity(_image_descriptor(left), _image_descriptor(right))
+
+
+def _archived_descriptor(prior: Case, entry: ArchiveEntry | None, media_dir: str) -> tuple[list[float], int] | None:
+    # A stored fingerprint avoids downloading every archived photo.
+    fingerprint = entry.fingerprint if entry and isinstance(entry.fingerprint, dict) else None
+    if fingerprint and isinstance(fingerprint.get("histogram"), list) and isinstance(fingerprint.get("dhash"), int):
+        return fingerprint["histogram"], fingerprint["dhash"]
+    path = _local_media_path(prior.base_image, media_dir)
+    return _image_descriptor(path) if path else None
 
 
 def _historical_matches(db: Session, case: Case, media_dir: str, limit: int = 3) -> list[tuple[Case, float, float, float, dict]]:
@@ -1416,6 +1450,9 @@ def _historical_matches(db: Session, case: Case, media_dir: str, limit: int = 3)
             Case.source_type.in_(("reddit_rss", "public_post_url")),
         )
     ).all()
+    entries = {entry.case_id: entry for entry in db.scalars(select(ArchiveEntry)).all()}
+    current_path = _local_media_path(case.base_image, media_dir)
+    current_descriptor = _image_descriptor(current_path) if current_path else None
     current_tokens = _tokens(case)
     scored: list[tuple[Case, float, float, float, dict]] = []
     for prior in archive:
@@ -1429,7 +1466,7 @@ def _historical_matches(db: Session, case: Case, media_dir: str, limit: int = 3)
         prior_tokens = _tokens(prior)
         union = current_tokens | prior_tokens
         text_score = len(current_tokens & prior_tokens) / len(union) if union else 0.0
-        visual_score = _visual_similarity(case.base_image, prior.base_image, media_dir)
+        visual_score = _descriptor_similarity(current_descriptor, _archived_descriptor(prior, entries.get(prior.id), media_dir))
         same_person = _canonical(case.celebrity) == _canonical(prior.celebrity)
         assessment = _outfit_match_assessment(
             case.source_title,
@@ -1680,9 +1717,11 @@ def _add_official_designer_reference(case: Case, settings) -> dict:
 
 
 def _same_file(left_path: str, right_path: str, media_dir: str) -> bool:
-    left = _local_media_path(left_path, media_dir)
-    right = _local_media_path(right_path, media_dir)
-    if not left or not right or left.stat().st_size != right.stat().st_size:
+    if left_path == right_path:
+        return True
+    # Only photos already on this instance are compared, to avoid downloads.
+    left, right = _media_file(left_path, media_dir), _media_file(right_path, media_dir)
+    if not left or not right or not left.is_file() or not right.is_file() or left.stat().st_size != right.stat().st_size:
         return False
     return hashlib.sha256(left.read_bytes()).digest() == hashlib.sha256(right.read_bytes()).digest()
 
@@ -1853,6 +1892,41 @@ def _remote_reddit_matches(db: Session, case: Case, settings, *, limit: int = 3)
     return selected, {"status": "completed", "provider": "reddit_oauth" if oauth_enabled else "reddit_rss", "query": query, "query_terms": query_terms, "time_scope": MATCH_TIME_SCOPE, "results": len(posts), "selected": len(selected)}
 
 
+def _restore_archive_image(db: Session, prior: Case, media_dir: str) -> tuple[str | None, str]:
+    """Find a usable photo for an archived look whose source image was purged."""
+    if _local_media_path(prior.base_image, media_dir):
+        return prior.base_image, "original"
+    entry = db.get(ArchiveEntry, prior.id)
+    if entry and entry.reference_image and _local_media_path(entry.reference_image, media_dir):
+        return entry.reference_image, "reference"
+    from .config import get_settings
+    settings = get_settings()
+    try:
+        if prior.source_type == "reddit_rss":
+            for url in _expand_reddit_post_media(prior.permalink, settings.reddit_user_agent)[:3]:
+                path = _download_image(url, media_dir, settings.reddit_user_agent)
+                if path:
+                    return path, "refetched"
+        else:
+            source = inspect_public_post(
+                prior.permalink,
+                user_agent=settings.source_import_user_agent,
+                allowed_domains=settings.public_import_allowed_domains,
+            )
+            _, downloaded, _ = download_public_images(
+                source["image_urls"][:1],
+                media_dir=media_dir,
+                user_agent=settings.source_import_user_agent,
+                referer=source["permalink"],
+            )
+            if downloaded:
+                return downloaded[0], "refetched"
+    except (AutomationError, PublicSourceError, requests.RequestException, OSError):
+        pass
+    # Instagram links expire and posts are deleted; the lead cannot be shown.
+    return None, "unavailable"
+
+
 def _add_matches(db: Session, case: Case, media_dir: str) -> list[Candidate]:
     created: list[Candidate] = []
     candidate_rows = db.scalars(select(Candidate).where(Candidate.case_id == case.id)).all()
@@ -1866,6 +1940,9 @@ def _add_matches(db: Session, case: Case, media_dir: str) -> list[Candidate]:
     for prior, score, text_score, visual_score, assessment in _historical_matches(db, case, media_dir):
         if prior.permalink in existing_urls:
             continue
+        image_path, image_origin = _restore_archive_image(db, prior, media_dir)
+        if not image_path:
+            continue
         same_person = _canonical(case.celebrity) == _canonical(prior.celebrity)
         prior_extraction = prior.extraction if isinstance(prior.extraction, dict) else {}
         prior_publisher = prior_extraction.get("source_publisher") or (
@@ -1877,7 +1954,7 @@ def _add_matches(db: Session, case: Case, media_dir: str) -> list[Candidate]:
             designer=prior.designer,
             event_name=prior.event_name,
             event_date=prior.event_date,
-            image_path=prior.base_image,
+            image_path=image_path,
             proposed_match_type="same_outfit_same_person" if same_person else "same_outfit_other_celebrity",
             status="automation_selected",
             visual_score=score,
@@ -1907,6 +1984,7 @@ def _add_matches(db: Session, case: Case, media_dir: str) -> list[Candidate]:
                     "matcher_version": MATCHER_VERSION,
                     "signature": assessment["signature"],
                     "source_description": prior.source_body,
+                    "archive_image": image_origin,
                 },
             },
         )
@@ -1936,7 +2014,7 @@ def _supersede_legacy_matches(db: Session, case: Case) -> int:
     return superseded
 
 
-def _research_existing_case(db: Session, case: Case, settings, static_dir: str, *, allow_remote: bool = True) -> dict:
+def _research_existing_case(db: Session, case: Case, settings, static_dir: str, *, allow_remote: bool = True, render: bool = True) -> dict:
     if not case_content_eligible(case):
         raise AutomationError("Archive research requires a clearly identified person in the source post")
     metadata_changes = _refresh_case_metadata(case)
@@ -1984,17 +2062,7 @@ def _research_existing_case(db: Session, case: Case, settings, static_dir: str, 
     else:
         case.match_type = "source_only"
         case.confidence = 0
-    collage = _render_automatic_draft(db, case, selected, settings, static_dir)
-    panel_count = len(build_render_assets(
-        case,
-        selected,
-        include_automation_matches=True,
-        panel_ids=_saved_panel_ids(case),
-    ))
-    case.extraction = {
-        **case.extraction,
-        "automatic_collage": {"id": collage.id, "panels": panel_count},
-    }
+    collage, _ = _automatic_draft(db, case, selected, settings, static_dir, render=render)
     db.add(
         AuditEvent(
             entity_type="case",
@@ -2168,18 +2236,17 @@ def import_public_post_automation(db: Session, payload: dict, settings, static_d
             "matches": research.get("matches", 0),
             "canvas_format": _saved_canvas_format(case),
             "layout_template": _saved_layout_template(case),
-            "preview_url": f"/outputs/case-{case.id}/collage.webp",
-            "bundle_url": f"/api/cases/{case.id}/bundle",
+            **_latest_render_urls(db, case, settings),
         }
     except PublicSourceError:
         db.rollback()
         for path in created_files:
-            path.unlink(missing_ok=True)
+            get_storage().delete(path)
         raise
     except Exception as exc:
         db.rollback()
         for path in created_files:
-            path.unlink(missing_ok=True)
+            get_storage().delete(path)
         raise AutomationError(f"Public post import failed: {exc}") from exc
 
 
@@ -2305,6 +2372,27 @@ def _render_automatic_draft(db: Session, case: Case, candidates: list[Candidate]
     return render_draft_collage(db, case, candidates, settings, static_dir)
 
 
+def _automatic_draft(
+    db: Session,
+    case: Case,
+    candidates: list[Candidate],
+    settings,
+    static_dir: str,
+    *,
+    render: bool | None = None,
+) -> tuple[Collage | None, int]:
+    """Render now, or record the panels and render when an editor opens the case."""
+    panel_count = len(build_render_assets(case, candidates, include_automation_matches=True, panel_ids=_saved_panel_ids(case)))
+    if render is None:
+        render = bool(getattr(settings, "collage_render_on_pull", False))
+    collage = _render_automatic_draft(db, case, candidates, settings, static_dir) if render else None
+    case.extraction = {
+        **case.extraction,
+        "automatic_collage": {"id": collage.id, "panels": panel_count} if collage else {"id": None, "panels": panel_count, "pending": True},
+    }
+    return collage, panel_count
+
+
 def migrate_legacy_matcher_outputs(db: Session, settings, static_dir: str) -> int:
     """Retire permissive matcher results before the API begins serving them."""
     case_ids = db.scalars(
@@ -2406,7 +2494,7 @@ def run_daily_automation(
         db.add(run)
     db.commit()
 
-    summary = {"job_id": run.id, "status": "running", "target_date": selected_date.isoformat(), "found": 0, "created": 0, "skipped": 0, "excluded": 0, "failed": 0, "researched": 0, "matches": 0, "collages": 0, "case_ids": []}
+    summary = {"job_id": run.id, "status": "running", "target_date": selected_date.isoformat(), "found": 0, "created": 0, "skipped": 0, "excluded": 0, "failed": 0, "researched": 0, "matches": 0, "collages": 0, "collages_deferred": 0, "case_ids": []}
     try:
         posts, feed_metadata = fetch_reddit_daily_posts(
             settings.reddit_subreddit,
@@ -2473,12 +2561,7 @@ def run_daily_automation(
                             Candidate.status == "automation_selected",
                         )
                     ).all()
-                    collage = _render_automatic_draft(db, existing, selected, settings, static_dir)
-                    panel_count = len(build_render_assets(existing, selected, include_automation_matches=True, panel_ids=_saved_panel_ids(existing)))
-                    existing.extraction = {
-                        **existing.extraction,
-                        "automatic_collage": {"id": collage.id, "panels": panel_count},
-                    }
+                    collage, panel_count = _automatic_draft(db, existing, selected, settings, static_dir)
                     db.add(
                         AuditEvent(
                             entity_type="case",
@@ -2489,7 +2572,7 @@ def run_daily_automation(
                         )
                     )
                     db.commit()
-                    summary["collages"] += 1
+                    summary["collages" if collage else "collages_deferred"] += 1
                 continue
             post["image_urls"], downloaded = _download_source_images(
                 post["image_urls"],
@@ -2561,12 +2644,7 @@ def run_daily_automation(
                 best = max(candidates, key=lambda item: item.visual_score)
                 case.match_type = best.proposed_match_type if best.status == "approved" else "unverified_outfit_lead"
                 case.confidence = best.visual_score
-            collage = _render_automatic_draft(db, case, candidates, settings, static_dir)
-            panel_count = len(build_render_assets(case, candidates, include_automation_matches=True, panel_ids=_saved_panel_ids(case)))
-            case.extraction = {
-                **case.extraction,
-                "automatic_collage": {"id": collage.id, "panels": panel_count},
-            }
+            collage, _ = _automatic_draft(db, case, candidates, settings, static_dir)
             db.add(
                 AuditEvent(
                     entity_type="case",
@@ -2580,7 +2658,7 @@ def run_daily_automation(
             summary["created"] += 1
             summary["researched"] += 1
             summary["matches"] += len(candidates)
-            summary["collages"] += 1
+            summary["collages" if collage else "collages_deferred"] += 1
             summary["case_ids"].append(case.id)
 
         # Recheck source-only cases as the retained Reddit archive grows. A
@@ -2620,15 +2698,10 @@ def run_daily_automation(
                         Candidate.status == "automation_selected",
                     )
                 ).all()
-                collage = _render_automatic_draft(db, case, selected, settings, static_dir)
-                panel_count = len(build_render_assets(case, selected, include_automation_matches=True, panel_ids=_saved_panel_ids(case)))
-                case.extraction = {
-                    **extraction,
-                    "collage_layout_version": COLLAGE_LAYOUT_VERSION,
-                    "automatic_collage": {"id": collage.id, "panels": panel_count},
-                }
+                case.extraction = {**extraction, "collage_layout_version": COLLAGE_LAYOUT_VERSION}
+                collage, panel_count = _automatic_draft(db, case, selected, settings, static_dir)
                 extraction = case.extraction
-                summary["collages"] += 1
+                summary["collages" if collage else "collages_deferred"] += 1
                 db.add(
                     AuditEvent(
                         entity_type="case",
@@ -2664,7 +2737,7 @@ def run_daily_automation(
                             pass
             if _canonical(case.designer) not in UNKNOWN_VALUES and remote_searches_used >= remote_search_budget:
                 continue
-            result = _research_existing_case(db, case, settings, static_dir)
+            result = _research_existing_case(db, case, settings, static_dir, render=bool(getattr(settings, "collage_render_on_pull", False)))
             db.commit()
             if result["search"].get("status") != "skipped":
                 remote_searches_used += 1
@@ -2702,16 +2775,8 @@ def run_daily_automation(
                     selected = db.scalars(
                         select(Candidate).where(Candidate.case_id == case.id, Candidate.status == "automation_selected")
                     ).all()
-                    collage = _render_automatic_draft(db, case, selected, settings, static_dir)
-                    panel_count = len(build_render_assets(case, selected, include_automation_matches=True, panel_ids=_saved_panel_ids(case)))
-                    case.extraction = {
-                        **case.extraction,
-                        "automatic_collage": {
-                            "id": collage.id,
-                            "panels": panel_count,
-                        },
-                    }
-                    summary["collages"] += 1
+                    collage, _ = _automatic_draft(db, case, selected, settings, static_dir)
+                    summary["collages" if collage else "collages_deferred"] += 1
                     db.add(
                         AuditEvent(
                             entity_type="case",

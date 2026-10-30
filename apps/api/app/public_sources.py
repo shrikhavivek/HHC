@@ -13,8 +13,9 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import requests
 from .safe_http import public_get
+from .storage import get_storage
 from bs4 import BeautifulSoup
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 
 MAX_DOCUMENT_BYTES = 4 * 1024 * 1024
@@ -24,6 +25,9 @@ MIN_SOURCE_EDGE = 320
 MAX_SOURCE_IMAGES = 20
 REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 IMAGE_FORMAT_EXTENSIONS = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}
+# Collages export at most 3 x 1080 px wide, so larger sources only cost storage.
+SOURCE_MAX_EDGE = 2560
+SOURCE_WEBP_QUALITY = 86
 DEFAULT_ALLOWED_DOMAINS = {
     "instagram.com",
     "threads.net",
@@ -43,6 +47,17 @@ DEFAULT_ALLOWED_DOMAINS = {
 
 class PublicSourceError(ValueError):
     pass
+
+
+def compact_source_image(content: bytes) -> bytes:
+    """Re-encode a downloaded source photo as WebP no larger than SOURCE_MAX_EDGE."""
+    with Image.open(io.BytesIO(content)) as source:
+        image = ImageOps.exif_transpose(source).convert("RGB")
+    image.thumbnail((SOURCE_MAX_EDGE, SOURCE_MAX_EDGE), Image.Resampling.LANCZOS)
+    output = io.BytesIO()
+    image.save(output, "WEBP", quality=SOURCE_WEBP_QUALITY, method=4)
+    image.close()
+    return output.getvalue()
 
 
 class DuplicatePublicSourceError(PublicSourceError):
@@ -473,6 +488,8 @@ def download_public_images(
         temporary: Path | None = None
         digest = hashlib.sha256(image_url.encode("utf-8")).hexdigest()[:24]
         existing = next((path for path in destination_dir.glob(f"{digest}.*") if _existing_image(path)), None)
+        if existing is None and get_storage().remote and get_storage().exists(destination_dir / f"{digest}.webp"):
+            existing = destination_dir / f"{digest}.webp"
         if existing:
             valid_urls.append(image_url)
             local_paths.append(f"/media-files/imports/{existing.name}")
@@ -497,10 +514,11 @@ def download_public_images(
                 if image_format not in IMAGE_FORMAT_EXTENSIONS or getattr(probe, "n_frames", 1) != 1:
                     continue
                 probe.verify()
-            destination = destination_dir / f"{digest}{IMAGE_FORMAT_EXTENSIONS[image_format]}"
+            destination = destination_dir / f"{digest}.webp"
             temporary = destination_dir / f".{digest}.tmp"
-            temporary.write_bytes(content)
+            temporary.write_bytes(compact_source_image(content))
             temporary.replace(destination)
+            get_storage().saved(destination)
             valid_urls.append(image_url)
             local_paths.append(f"/media-files/imports/{destination.name}")
             created_files.append(destination)

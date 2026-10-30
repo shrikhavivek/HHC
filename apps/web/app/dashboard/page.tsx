@@ -4,12 +4,14 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { EditorialDesk, type EditorialDeskHandle } from "@/components/editorial-desk";
 import { readResume, rememberStory, storyDestination, validCaseId } from "@/lib/editorial-flow";
+import { stageFormFile } from "@/lib/staged-upload";
 import { StudioBrand } from "@/components/studio-brand";
 import { CroppedPhotoPreview } from "@/components/cropped-photo-preview";
 import { CollageLayoutPreview, useLayoutPreviews } from "@/components/collage-layout-preview";
 import { MatchVerification } from "@/components/match-verification";
 import { OutfitContext } from "@/components/outfit-context";
 import { InstagramWatchlist } from "@/components/instagram-watchlist";
+import { BrowserSourceControls } from "@/components/browser-source-controls";
 import { useUndoHistory } from "@/lib/use-undo-history";
 
 type WorkspaceView = "today" | "women" | "men" | "both" | "pending" | "reviewed";
@@ -202,7 +204,7 @@ const VIEW_META: Record<WorkspaceView, { label: string; short: string; title: st
     short: "Women’s desk",
     title: "The womenswear edit.",
     accent: "Every appearance, clearly filed.",
-    description: "Women’s looks from the daily Reddit intake, with outfit research and collage status together.",
+    description: "Women’s looks, including shared appearances, with outfit research and collage status together.",
     listTitle: "Women’s looks",
     listKicker: "Dedicated content desk",
   },
@@ -211,7 +213,7 @@ const VIEW_META: Record<WorkspaceView, { label: string; short: string; title: st
     short: "Men’s desk",
     title: "The menswear edit.",
     accent: "A sharper menswear archive.",
-    description: "Men’s looks separated into a focused listing without losing their editorial evidence.",
+    description: "Men’s looks, including shared appearances, in a focused listing with their editorial evidence.",
     listTitle: "Men’s looks",
     listKicker: "Dedicated content desk",
   },
@@ -220,7 +222,7 @@ const VIEW_META: Record<WorkspaceView, { label: string; short: string; title: st
     short: "Shared desk",
     title: "In good company.",
     accent: "Group appearances, clearly filed.",
-    description: "Looks featuring both women and men are collected in their own section for focused group-post review.",
+    description: "Looks featuring both women and men, also listed on the women’s and men’s desks.",
     listTitle: "Both fashion looks",
     listKicker: "Shared appearances",
   },
@@ -261,8 +263,9 @@ const isBlocked = (value: string) => ["do_not_use", "blocked", "unknown_blocked"
 const assetRoleLabel = (role: OutfitAsset["role"]) => role === "designer_reference" ? "Original outfit" : role === "editor_upload" ? "Editor upload" : "Current angle";
 
 function belongsToView(item: CaseSummary, view: WorkspaceView) {
-  if (view === "women") return item.fashion_category === "women";
-  if (view === "men") return item.fashion_category === "men";
+  // Looks featuring women and men are listed on both desks as well as Both.
+  if (view === "women") return item.fashion_category === "women" || item.fashion_category === "mixed";
+  if (view === "men") return item.fashion_category === "men" || item.fashion_category === "mixed";
   if (view === "both") return item.fashion_category === "mixed";
   if (view === "pending") return PENDING_STATUSES.has(item.status);
   if (view === "reviewed") return REVIEWED_STATUSES.has(item.status);
@@ -1070,8 +1073,8 @@ export default function DashboardPage() {
   ] : [];
   const pendingCount = cases.filter(item => PENDING_STATUSES.has(item.status)).length;
   const reviewedCount = cases.filter(item => REVIEWED_STATUSES.has(item.status)).length;
-  const womenCount = cases.filter(item => item.fashion_category === "women").length;
-  const menCount = cases.filter(item => item.fashion_category === "men").length;
+  const womenCount = cases.filter(item => belongsToView(item, "women")).length;
+  const menCount = cases.filter(item => belongsToView(item, "men")).length;
   const bothCount = cases.filter(item => item.fashion_category === "mixed").length;
   const providersLive = ["rss", "live", "approved_api"].includes(dashboard?.source_mode || "");
   const meta = VIEW_META[workspaceView];
@@ -1249,7 +1252,7 @@ export default function DashboardPage() {
     payload.set("editor_id", "editor@atelier");
     setUploadBusy(true);
     try {
-      const response = await fetch(`/api/backend/cases/${selected.id}/collage/assets`, { method: "POST", body: payload });
+      const response = await fetch(`/api/backend/cases/${selected.id}/collage/assets`, { method: "POST", body: await stageFormFile(payload) });
       const data = await response.json();
       if (!response.ok) return setToast(data.detail || "The image could not be uploaded.");
       const caseId = selected.id;
@@ -1272,7 +1275,7 @@ export default function DashboardPage() {
     payload.set("editor_id", "editor@atelier");
     setWatermarkBusy(true);
     try {
-      const response = await fetch(`/api/backend/cases/${selected.id}/collage/watermark`, { method: "POST", body: payload });
+      const response = await fetch(`/api/backend/cases/${selected.id}/collage/watermark`, { method: "POST", body: await stageFormFile(payload) });
       const data = await response.json();
       if (!response.ok) return setToast(data.detail || "The watermark could not be uploaded.");
       setEditorWatermark(data.watermark);
@@ -1363,8 +1366,8 @@ export default function DashboardPage() {
       </button>
       <nav aria-label="Workspace navigation">
         <button type="button" aria-label="Today's edit" title="Today's edit" data-short-label="Today" className={`nav-item ${workspaceView === "today" ? "active" : ""}`} onClick={() => switchView("today")} aria-current={workspaceView === "today" ? "page" : undefined}><Icon name="grid"/><span className="nav-copy"><strong>Today&apos;s edit</strong><small>Daily outfit desk</small></span><b>{cases.length}</b></button>
-        <button type="button" aria-label="Women's fashion" title="Women's fashion" data-short-label="Women" className={`nav-item ${workspaceView === "women" ? "active" : ""}`} onClick={() => switchView("women")} aria-current={workspaceView === "women" ? "page" : undefined}><Icon name="woman"/><span className="nav-copy"><strong>Women&apos;s fashion</strong><small>Women-only looks</small></span><b>{womenCount}</b></button>
-        <button type="button" aria-label="Men's fashion" title="Men's fashion" data-short-label="Men" className={`nav-item ${workspaceView === "men" ? "active" : ""}`} onClick={() => switchView("men")} aria-current={workspaceView === "men" ? "page" : undefined}><Icon name="man"/><span className="nav-copy"><strong>Men&apos;s fashion</strong><small>Men-only looks</small></span><b>{menCount}</b></button>
+        <button type="button" aria-label="Women's fashion" title="Women's fashion" data-short-label="Women" className={`nav-item ${workspaceView === "women" ? "active" : ""}`} onClick={() => switchView("women")} aria-current={workspaceView === "women" ? "page" : undefined}><Icon name="woman"/><span className="nav-copy"><strong>Women&apos;s fashion</strong><small>Includes shared looks</small></span><b>{womenCount}</b></button>
+        <button type="button" aria-label="Men's fashion" title="Men's fashion" data-short-label="Men" className={`nav-item ${workspaceView === "men" ? "active" : ""}`} onClick={() => switchView("men")} aria-current={workspaceView === "men" ? "page" : undefined}><Icon name="man"/><span className="nav-copy"><strong>Men&apos;s fashion</strong><small>Includes shared looks</small></span><b>{menCount}</b></button>
         <button type="button" aria-label="Both fashion" title="Both fashion" data-short-label="Both" className={`nav-item ${workspaceView === "both" ? "active" : ""}`} onClick={() => switchView("both")} aria-current={workspaceView === "both" ? "page" : undefined}><Icon name="both"/><span className="nav-copy"><strong>Both fashion</strong><small>Women &amp; men together</small></span><b>{bothCount}</b></button>
         <button type="button" aria-label="Pending review" title="Pending review" data-short-label="Review" className={`nav-item ${workspaceView === "pending" ? "active" : ""}`} onClick={() => switchView("pending")} aria-current={workspaceView === "pending" ? "page" : undefined}><Icon name="queue"/><span className="nav-copy"><strong>Pending review</strong><small>Needs your decision</small></span><b>{pendingCount}</b></button>
         <button type="button" aria-label="Reviewed" title="Reviewed" data-short-label="Archive" className={`nav-item ${workspaceView === "reviewed" ? "active" : ""}`} onClick={() => switchView("reviewed")} aria-current={workspaceView === "reviewed" ? "page" : undefined}><Icon name="archive"/><span className="nav-copy"><strong>Reviewed</strong><small>Completed decisions</small></span><b>{reviewedCount}</b></button>
@@ -1402,6 +1405,7 @@ export default function DashboardPage() {
 
       <EditorialDesk ref={editorialDesk} selected={selected} username={profile?.username || ""} resumeStep={resumeStep} onResumeHandled={() => setResumeStep(null)} onEditCollage={openCollageEditor} onRefresh={() => { if (showCollageEditor || showIntake || decisionMode) return; if (selected) void openCase(selected.id); void load(); }}/>
       {selected?.demo_data && <p className="edition-message">Demonstration case and placeholder photographs. Connect a source in Sources &amp; schedule to prepare real editorial images.</p>}
+      <BrowserSourceControls onCollected={load}/>
       <InstagramWatchlist onOpen={async caseId => { setWorkspaceView("today"); setFilter("all"); setSearch(""); await load(); await openCase(caseId); }}/>
       <div className="workbench-heading"><div><span className="workbench-kicker">THE EDITORIAL DESK</span><h2>The working edit.</h2></div><p>Instagram &amp; Reddit: today &amp; yesterday · Websites: current week<span>Publication dates · Asia/Kolkata</span></p></div>
       <section className="workspace studio-workspace" id="daily-looks" tabIndex={-1} aria-label="Daily looks">

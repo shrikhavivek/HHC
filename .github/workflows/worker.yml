@@ -1,0 +1,56 @@
+# Hourly edition refresh and archive retention for the hosted (Vercel +
+# Supabase) setup. The API can also start it on demand ("Refresh now").
+name: worker
+
+on:
+  schedule:
+    - cron: "35 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: worker
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    defaults:
+      run:
+        working-directory: apps/api
+    env:
+      APP_ENV: production
+      # Session pooler (port 5432) or direct connection: the worker holds an
+      # advisory lock for the whole run, which the transaction pooler cannot.
+      DATABASE_URL: ${{ secrets.WORKER_DATABASE_URL }}
+      EDITOR_API_KEY: ${{ secrets.EDITOR_API_KEY }}
+      STORAGE_BACKEND: supabase
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      SUPABASE_BUCKET: ${{ vars.SUPABASE_BUCKET || 'hhc' }}
+      MEDIA_DIR: /tmp/hhc/media
+      OUTPUT_DIR: /tmp/hhc/outputs
+      STATIC_DIR: /tmp/hhc/static
+      REDDIT_SOURCE_MODE: ${{ vars.REDDIT_SOURCE_MODE || 'rss' }}
+      REDDIT_USER_AGENT: ${{ vars.REDDIT_USER_AGENT }}
+      REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
+      REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
+      SERPAPI_KEY: ${{ secrets.SERPAPI_KEY }}
+      INSTAGRAM_ACCESS_TOKEN: ${{ secrets.INSTAGRAM_ACCESS_TOKEN }}
+      INSTAGRAM_ACCOUNT_ID: ${{ secrets.INSTAGRAM_ACCOUNT_ID }}
+      DAILY_AUTOMATION_ENABLED: "true"
+      ARCHIVE_PURGE_ENABLED: ${{ vars.ARCHIVE_PURGE_ENABLED || 'true' }}
+      HISTORY_RETENTION_DAYS: ${{ vars.HISTORY_RETENTION_DAYS || '90' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: apps/api/requirements.txt
+      - run: sudo apt-get install -y --no-install-recommends fonts-dejavu-core
+      - run: pip install -r requirements.txt
+      - name: Migrate database
+        run: python -m app.migrate
+      - name: Refresh editions
+        run: python -m app.worker --once

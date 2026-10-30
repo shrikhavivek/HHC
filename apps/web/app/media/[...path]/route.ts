@@ -23,9 +23,15 @@ export async function GET(_request: NextRequest, context: Context) {
   const target = new URL(`/${path.map(encodeURIComponent).join("/")}`, base);
   let response: Response;
   try {
-    response = await fetch(target, { headers: { "X-Editor-Key": process.env.EDITOR_API_KEY || "local-editor-key" }, cache: "no-store", redirect: "error", signal: AbortSignal.timeout(15000) });
+    response = await fetch(target, { headers: { "X-Editor-Key": process.env.EDITOR_API_KEY || "local-editor-key" }, cache: "no-store", redirect: "manual", signal: AbortSignal.timeout(15000) });
   } catch {
     return NextResponse.json({ detail: "Media service unavailable" }, { status: 502 });
+  }
+  const location = response.headers.get("location");
+  if (response.status >= 300 && response.status < 400 && location?.startsWith("https://")) {
+    // Hosted storage: the browser loads the file from a short-lived signed link.
+    // Reusing the redirect for a while lets the browser cache the image itself.
+    return new NextResponse(null, { status: 307, headers: { Location: location, "Cache-Control": "private, max-age=1800", "Referrer-Policy": "no-referrer" } });
   }
   if (!response.ok || !response.body) {
     return NextResponse.json({ detail: "Image not found" }, { status: response.status });

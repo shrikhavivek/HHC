@@ -25,6 +25,16 @@ KNOWN_WOMEN = {
     "sandeepa dhar", "sara ali khan", "shilpa shetty", "shreya goshal", "simone ashley",
     "sonal chauhan", "sonali bendre", "sonam kapoor", "sreeleela", "sushmita sen",
     "tamannaah bhatia", "tara sutaria", "triptii dimri", "vidya balan",
+    # Instagram watchlist (instagram_watchlist.json).
+    "amrita rao", "anushka sharma", "bhumi pednekar", "bipasha basu", "dia mirza", "disha patani",
+    "esha deol", "fatima sana shaikh", "genelia deshmukh", "huma qureshi", "ileana d cruz",
+    "juhi chawla", "kajal aggarwal", "kareena kapoor khan", "karisma kapoor", "konkona sen sharma", "kriti kharbanda",
+    "lara dutta", "madhuri dixit", "manisha koirala", "mouni roy", "nora fatehi", "pooja hegde",
+    "pratibha ranta", "preity zinta", "radhika apte", "radhika madan", "rasha thadani",
+    "raveena tandon", "richa chadha", "saiyami kher", "sanya malhotra", "sharvari",
+    "shehnaaz gill", "sobhita dhulipala", "shraddha kapoor", "shruti haasan", "soha ali khan",
+    "sonakshi sinha", "suhana khan", "sunny leone", "tabu", "taapsee pannu", "urvashi rautela",
+    "vaani kapoor", "wamiqa gabbi",
 }
 KNOWN_MEN = {
     "abhay verma", "abhay deol", "vijay varma", "rajkummar rao", "sidhant gupta",
@@ -33,6 +43,16 @@ KNOWN_MEN = {
     "babil khan", "diljit dosanjh", "hrithik roshan", "ishaan khatter", "kartik aaryan",
     "ranbir kapoor", "ranveer singh", "saif ali khan", "shahid kapoor", "shah rukh khan",
     "siddhant chaturvedi", "siddharth batra", "sidharth malhotra", "varun dhawan", "vicky kaushal",
+    # Instagram watchlist (instagram_watchlist.json).
+    "abhishek bachchan", "ajay devgn", "anil kapoor", "arjun rampal", "bobby deol", "dulquer salmaan",
+    "emraan hashmi", "farhan akhtar", "john abraham", "manoj bajpayee", "nawazuddin siddiqui",
+    "randeep hooda", "riteish deshmukh", "salman khan", "sanjay dutt", "sonu sood", "sunny deol",
+    "tiger shroff", "vikrant massey",
+    "aamir khan", "aryan khan", "ali fazal", "jim sarbh", "pankaj tripathi", "jaideep ahlawat",
+    "rajkumar rao", "shahrukh khan", "srk", "ahan shetty", "ahaan panday", "rohit saraf",
+    "suniel shetty", "jackie shroff", "zaheer iqbal", "aadar jain", "anant ambani", "akash ambani",
+    "orry", "vijay deverakonda", "allu arjun", "prabhas", "ram charan", "mahesh babu",
+    "naga chaitanya", "rana daggubati",
 }
 
 WOMEN_SIGNALS = {
@@ -45,6 +65,9 @@ MEN_SIGNALS = {
     "gentleman", "gentlemen", "son", "sons", "father", "fathers", "husband", "husbands",
     "brother", "brothers", "nephew", "nephews",
 }
+# Clothing that is worn almost only by one group; used when no person is identified.
+MENSWEAR = {"sherwani", "sherwanis", "bandhgala", "bandhgalas", "achkan", "jodhpuri", "pathani"}
+WOMENSWEAR = {"saree", "sarees", "sari", "saris", "lehenga", "lehengas", "anarkali", "blouse", "gown", "gowns"}
 GROUP_SIGNALS = {"with", "alongside", "couple", "duo", "pair", "group", "celebrities", "together"}
 
 
@@ -76,8 +99,19 @@ def classify_fashion_category(celebrity: str, title: str = "", description: str 
         return celebrity_category
     # A generic group title can use explicit joint-appearance context.
     if _signal_count(_canonical(title), GROUP_SIGNALS):
-        return _classify_subjects(celebrity, title, description)
-    return "unclassified"
+        grouped = _classify_subjects(celebrity, title, description)
+        if grouped != "unclassified":
+            return grouped
+    return _classify_clothing(title, description)
+
+
+def _classify_clothing(title: str, description: str) -> str:
+    """Last resort: clothing named in the post, e.g. "At the sangeet in a Sabyasachi sherwani"."""
+    tokens = set(_canonical(f"{title} {description}").split())
+    menswear, womenswear = bool(tokens & MENSWEAR), bool(tokens & WOMENSWEAR)
+    if menswear and womenswear:
+        return "mixed"
+    return "men" if menswear else "women" if womenswear else "unclassified"
 
 
 def _classify_subjects(celebrity: str, title: str = "", description: str = "") -> str:

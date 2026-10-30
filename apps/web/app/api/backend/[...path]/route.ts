@@ -19,7 +19,10 @@ async function proxy(request: NextRequest, context: Context) {
       while (true) { const { done, value } = await reader.read(); if (done) break; size += value.length; if (size > 24 * 1024 * 1024) { await reader.cancel(); return NextResponse.json({ detail: "Upload must be under 24 MB." }, { status: 413 }); } chunks.push(value); }
     }
     const body = chunks.length ? Buffer.concat(chunks) : undefined;
-    const response = await fetch(target, { method: request.method, headers, body, cache: "no-store", redirect: "error", signal: AbortSignal.timeout(180000) });
+    const response = await fetch(target, { method: request.method, headers, body, cache: "no-store", redirect: "manual", signal: AbortSignal.timeout(180000) });
+    const location = response.headers.get("location");
+    // Large downloads (evidence ZIPs) come from hosted storage via a signed link.
+    if (response.status >= 300 && response.status < 400 && location?.startsWith("https://")) return NextResponse.redirect(location, 307);
     const responseHeaders: Record<string, string> = { "Content-Type": response.headers.get("content-type") || "application/json", "Cache-Control": "private, no-store" };
     for (const name of ["content-disposition", "retry-after"]) if (response.headers.get(name)) responseHeaders[name] = response.headers.get(name)!;
     return new NextResponse(response.body, { status: response.status, headers: responseHeaders });

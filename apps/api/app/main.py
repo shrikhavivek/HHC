@@ -10,14 +10,16 @@ from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 from .assets import build_panel_catalog, build_render_assets, default_panel_ids, normalize_case_assets
+from .archive import keep_verified_look
 from .automation import (
     AutomationError,
+    _automatic_draft,
     MATCHER_VERSION,
     case_content_eligible,
     editorial_subject_eligibility,
@@ -29,7 +31,7 @@ from .automation import (
     research_case_automation,
     run_daily_automation,
 )
-from .collage import ensure_demo_images, render_bundle, side_by_side_geometry, _instagram_geometry, INSTAGRAM_CANVAS_FORMATS, COLLAGE_LAYOUT_TEMPLATES
+from .collage import bundle_archive, bundle_download_url, ensure_demo_images, render_bundle, render_urls, side_by_side_geometry, _instagram_geometry, INSTAGRAM_CANVAS_FORMATS, COLLAGE_LAYOUT_TEMPLATES
 from .schemas import LayoutPreviewInput
 from .config import get_settings
 from .database import Base, SessionLocal, engine, get_db
@@ -46,16 +48,19 @@ from .schemas import WebDiscoveryImport, WebDiscoveryQuery
 from .schemas import CollageEditInput, CollageInput, DecisionInput, FashionCategoryInput, ManualIntake, SourceUrlIntake
 from .seed import seed_database
 from .security import PrivateAPIMiddleware, current_actor
+from .storage import get_storage
+from .uploads import MAX_STAGED_UPLOADS, one_upload
 from .review import approval_errors
-from .editorial import router as editorial_router
+from .editorial import locked_state, router as editorial_router
 from .wordpress import router as wordpress_router
 from .worker import router as worker_router
 from .instagram_browser import router as instagram_browser_router
 from .reddit_gallery import router as reddit_gallery_router, incomplete as reddit_gallery_incomplete
+from .reddit_browser import router as reddit_browser_router
 
 
 settings = get_settings()
-STATIC_DIR = str(Path(__file__).parent / "static")
+STATIC_DIR = settings.static_dir or str(Path(__file__).parent / "static")
 Path(settings.output_dir).mkdir(parents=True, exist_ok=True)
 Path(settings.media_dir).mkdir(parents=True, exist_ok=True)
 ensure_demo_images(STATIC_DIR)
@@ -192,8 +197,9 @@ async def _daily_scheduler():
         await asyncio.sleep(30)
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
+def run_startup_tasks():
+    """Create tables and refresh stored data. Serverless runs this once via app.migrate."""
+    get_storage().ensure_bucket()
     Base.metadata.create_all(engine)
     if settings.reddit_source_mode == "manual" and settings.app_env != "production":
         with SessionLocal() as db:
@@ -202,6 +208,12 @@ async def lifespan(app: FastAPI):
         migrate_legacy_matcher_outputs(db, settings, STATIC_DIR)
         refresh_existing_case_metadata(db)
         refresh_existing_content_policy(db)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    if settings.run_startup_tasks:
+        run_startup_tasks()
     scheduler = asyncio.create_task(_daily_scheduler()) if settings.scheduler_in_api else None
     try:
         yield
@@ -218,13 +230,46 @@ app = FastAPI(title="Outfit Research API", version="1.0.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=[x.strip() for x in settings.cors_origins.split(",")], allow_methods=["*"], allow_headers=["*"])
 app.add_middleware(PrivateAPIMiddleware, key=settings.editor_api_key)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-app.mount("/outputs", StaticFiles(directory=settings.output_dir), name="outputs")
-app.mount("/media-files", StaticFiles(directory=settings.media_dir), name="media-files")
+if get_storage().remote:
+    # Files live in the bucket; the web proxy sends the browser a signed link.
+    @app.get("/outputs/{path:path}")
+    def output_file(path: str):
+        return _signed_redirect(settings.output_dir, path)
+
+    @app.get("/media-files/{path:path}")
+    def media_file(path: str):
+        return _signed_redirect(settings.media_dir, path)
+else:
+    app.mount("/outputs", StaticFiles(directory=settings.output_dir), name="outputs")
+    app.mount("/media-files", StaticFiles(directory=settings.media_dir), name="media-files")
+
+
+def _signed_redirect(root: str, path: str):
+    base = Path(root).resolve()
+    target = (base / path).resolve()
+    url = get_storage().signed_url(target) if base in target.parents else None
+    if not url:
+        raise HTTPException(404, "File not found")
+    return RedirectResponse(url, status_code=307)
+
+
+@app.post("/api/uploads", dependencies=[Depends(require_editor)])
+def upload_links(payload: dict):
+    """Upload links for files too large to send through a serverless request."""
+    count = payload.get("count") if isinstance(payload, dict) else None
+    if not isinstance(count, int) or not 1 <= count <= MAX_STAGED_UPLOADS:
+        raise HTTPException(422, "Request between 1 and 20 upload links")
+    try:
+        targets = get_storage().upload_targets(count)
+    except OSError as exc:
+        raise HTTPException(503, "Storage is unavailable; try again") from exc
+    return {"mode": "inline"} if targets is None else {"mode": "direct", "uploads": targets}
 app.include_router(editorial_router)
 app.include_router(wordpress_router)
 app.include_router(worker_router)
 app.include_router(instagram_browser_router)
 app.include_router(reddit_gallery_router)
+app.include_router(reddit_browser_router)
 
 
 @app.get("/health")
@@ -317,21 +362,36 @@ def get_case(case_id: str, db: Session = Depends(get_db)):
     case = db.scalar(stmt)
     if not case or not case_content_eligible(case):
         raise HTTPException(404, "Case not found")
+    pending = (case.extraction or {}).get("automatic_collage") or {}
+    if pending.get("pending"):
+        # Hourly pulls only collect sources; the draft is built on first open.
+        locked_state(db, f"collage-render:{case.id}", {})
+        db.refresh(case)
+        if ((case.extraction or {}).get("automatic_collage") or {}).get("pending"):
+            candidates = [item for item in case.candidates if item.status != "automation_draft_anchor"]
+            try:
+                _automatic_draft(db, case, candidates, settings, STATIC_DIR, render=True)
+                db.add(AuditEvent(entity_type="case", entity_id=case.id, action="automatic_draft_rendered_on_open", actor=current_actor(), detail={}))
+            except (OSError, ValueError):
+                db.rollback()
+                case = db.scalar(stmt)
+        db.commit()
     data = case_json(case, detail=True)
     collage = db.scalar(select(Collage).where(Collage.case_id == case_id).order_by(Collage.created_at.desc()))
-    relative_dir = Path(collage.image_path).resolve().parent.relative_to(Path(settings.output_dir).resolve()).as_posix() if collage else f"case-{case.id}"
-    preview_url = f"/outputs/{relative_dir}/collage.webp"
-    base_preview_path = Path(settings.output_dir) / relative_dir / "collage-base.webp"
-    source_preview_path = Path(settings.output_dir) / relative_dir / "collage-source.webp"
+    if collage and not get_storage().exists(collage.image_path):
+        # Renders of closed editions are purged; the sent copy lives in WordPress.
+        data["assets_purged"] = True
+        collage = None
     data["latest_collage"] = None if not collage else {
         "id": collage.id,
-        "preview_url": preview_url,
-        "base_preview_url": f"/outputs/{relative_dir}/collage-base.webp" if base_preview_path.is_file() else preview_url,
-        "source_preview_url": f"/outputs/{relative_dir}/collage-source.webp" if source_preview_path.is_file() else (f"/outputs/{relative_dir}/collage-base.webp" if base_preview_path.is_file() else preview_url),
-        "bundle_url": f"/api/cases/{case.id}/bundle",
+        **collage_urls(collage.image_path, case.id),
         "created_at": collage.created_at.isoformat(),
     }
     return data
+
+
+def collage_urls(image_path: str, case_id: str) -> dict:
+    return render_urls(image_path, settings.output_dir, case_id)
 
 
 @app.post("/api/intake/reddit-url", status_code=201, dependencies=[Depends(require_editor)])
@@ -464,6 +524,8 @@ def decide(candidate_id: str, payload: DecisionInput, db: Session = Depends(get_
     db.add(decision)
     db.flush()
     db.add(AuditEvent(entity_type="candidate", entity_id=candidate.id, action=f"decision:{payload.decision}", actor=payload.editor_id, detail={"reason": payload.reason, "decision_id": decision.id}))
+    if payload.decision == "approved":
+        keep_verified_look(db, candidate.case, settings.media_dir, candidate)
     db.commit()
     return candidate_json(candidate)
 
@@ -516,13 +578,15 @@ def create_collage(case_id: str, payload: CollageInput, db: Session = Depends(ge
     db.flush()
     db.add(AuditEvent(entity_type="case", entity_id=case.id, action="collage_generated", actor=decision.editor_id, detail={"collage_id": record.id, "asset_count": len(render_assets), "candidate_ids": [item.id for item in approved_candidates], "custom_layout": bool(saved_panel_ids)}))
     db.commit()
-    return {"id": record.id, "preview_url": f"/outputs/case-{case.id}/collage.webp", "base_preview_url": f"/outputs/case-{case.id}/collage-base.webp", "source_preview_url": f"/outputs/case-{case.id}/collage-source.webp", "bundle_url": f"/api/cases/{case.id}/bundle", "asset_count": len(render_assets), "canvas_format": saved_canvas_format, "layout_template": saved_layout_template}
+    return {"id": record.id, **collage_urls(image_path, case.id), "asset_count": len(render_assets), "canvas_format": saved_canvas_format, "layout_template": saved_layout_template}
 
 
 @app.post("/api/cases/{case_id}/collage/assets", status_code=201, dependencies=[Depends(require_editor)])
 async def upload_collage_asset(
     case_id: str,
-    image: UploadFile = File(...),
+    image: UploadFile | None = File(None),
+    upload_keys: str = Form(""),
+    upload_names: str = Form(""),
     label: str = Form("Editor-supplied image"),
     person: str = Form(""),
     source_url: str = Form(""),
@@ -555,6 +619,7 @@ async def upload_collage_asset(
     if sum(isinstance(item, dict) and item.get("role") == "editor_upload" for item in assets) >= 12:
         raise HTTPException(422, "This case already has the maximum of 12 editor uploads")
 
+    image = one_upload(image, upload_keys, upload_names)
     try:
         content = await image.read(MAX_UPLOAD_BYTES + 1)
     finally:
@@ -603,7 +668,7 @@ async def upload_collage_asset(
         db.commit()
     except Exception:
         db.rollback()
-        (Path(settings.media_dir) / image_path.removeprefix("/media-files/")).unlink(missing_ok=True)
+        get_storage().delete(Path(settings.media_dir) / image_path.removeprefix("/media-files/"))
         raise
     normalized = next(item for item in normalize_case_assets(case) if item["id"] == asset_id)
     return {"case_id": case.id, "asset": normalized}
@@ -612,7 +677,9 @@ async def upload_collage_asset(
 @app.post("/api/cases/{case_id}/collage/watermark", status_code=201, dependencies=[Depends(require_editor)])
 async def upload_collage_watermark(
     case_id: str,
-    image: UploadFile = File(...),
+    image: UploadFile | None = File(None),
+    upload_keys: str = Form(""),
+    upload_names: str = Form(""),
     editor_id: str = Form("editor@atelier"),
     db: Session = Depends(get_db),
 ):
@@ -623,6 +690,7 @@ async def upload_collage_watermark(
     if len(editor_id) < 2 or len(editor_id) > 120:
         raise HTTPException(422, "Editor identifier must be between 2 and 120 characters")
 
+    image = one_upload(image, upload_keys, upload_names)
     try:
         content = await image.read(MAX_WATERMARK_UPLOAD_BYTES + 1)
     finally:
@@ -685,7 +753,7 @@ async def upload_collage_watermark(
         db.commit()
     except Exception:
         db.rollback()
-        (Path(settings.media_dir) / image_path.removeprefix("/media-files/")).unlink(missing_ok=True)
+        get_storage().delete(Path(settings.media_dir) / image_path.removeprefix("/media-files/"))
         raise
     return {"case_id": case.id, "asset": watermark_asset, "watermark": watermark}
 
@@ -814,10 +882,7 @@ def edit_collage(case_id: str, payload: CollageEditInput, db: Session = Depends(
     db.commit()
     return {
         "id": collage.id,
-        "preview_url": f"/outputs/case-{case.id}/collage.webp",
-        "base_preview_url": f"/outputs/case-{case.id}/collage-base.webp",
-        "source_preview_url": f"/outputs/case-{case.id}/collage-source.webp",
-        "bundle_url": f"/api/cases/{case.id}/bundle",
+        **collage_urls(collage.image_path, case.id),
         "asset_count": len(selected),
         "selected_ids": payload.panel_ids,
         "panel_options": panel_options,
@@ -835,9 +900,15 @@ def download_bundle(case_id: str, db: Session = Depends(get_db)):
     if not case or not case_content_eligible(case):
         raise HTTPException(404, "Case not found")
     collage = db.scalar(select(Collage).where(Collage.case_id == case_id).order_by(Collage.created_at.desc()))
-    if not collage or not os.path.exists(collage.bundle_path):
+    if collage and get_storage().remote:
+        url = bundle_download_url(collage.bundle_path)
+        if url is None:
+            raise HTTPException(404, "No collage bundle exists")
+        return RedirectResponse(url, status_code=307)
+    content = bundle_archive(collage.bundle_path) if collage else None
+    if content is None:
         raise HTTPException(404, "No collage bundle exists")
-    return FileResponse(collage.bundle_path, filename=f"case-{case_id}-bundle.zip", media_type="application/zip")
+    return Response(content, media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="case-{case_id}-bundle.zip"'})
 
 
 @app.post("/api/runs/daily", dependencies=[Depends(require_editor)])

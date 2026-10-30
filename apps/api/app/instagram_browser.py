@@ -16,11 +16,14 @@ from .automation import render_draft_collage
 from .config import get_settings
 from .database import get_db
 from .editor_uploads import MAX_UPLOAD_BYTES, UploadValidationError, store_editor_image
+from .storage import get_storage
+from .uploads import staged_uploads
 from .editorial import locked_state
 from .models import AuditEvent, Case, Collage, ServiceState, StoryDraft
 from .assets import build_render_assets
 from .publication_dates import is_recent_post, publication_stamp
 from .security import current_actor
+from .browser_coverage import CoverageReport
 
 router = APIRouter(prefix="/api/instagram-browser")
 CONFIG_KEY = "instagram-browser:config"
@@ -108,6 +111,12 @@ def brand_mentions(caption, tags, brands):
                 evidence.append(alias)
         if evidence:
             matches.append({"name": brand.name, "evidence": sorted(set(evidence))})
+    for handle in re.findall(r"\b(?:wearing|dressed\s+in|(?:outfit|dress|saree|sari|gown|suit|jacket|clothing|designer|brand)\s*(?::|by|from))\s*@([A-Za-z0-9._]{1,30})\b", caption, re.I):
+        if re.search(r"stylist|photograph|makeup|hairstyl|^mua$", handle, re.I):
+            continue
+        evidence = f"@{handle}"
+        if not any(evidence.casefold() in {item.casefold() for item in match["evidence"]} for match in matches):
+            matches.append({"name": evidence, "evidence": [evidence, "Explicit clothing credit in caption; attribution needs review"]})
     return matches
 
 
@@ -216,7 +225,7 @@ def claim_scan(db: Session = Depends(get_db)):
 
 @router.get("/posts")
 def recent_posts(db: Session = Depends(get_db)):
-    cases = db.scalars(select(Case).where(Case.external_id.like("instagram-browser:%")).order_by(Case.created_at.desc()).limit(500)).all()
+    cases = db.scalars(select(Case).where(Case.external_id.like("instagram-browser:%")).order_by(Case.created_at.desc())).all()
     results = []
     for case in cases:
         extraction = case.extraction or {}
@@ -228,21 +237,22 @@ def recent_posts(db: Session = Depends(get_db)):
                 "photo_count": carousel.get("photo_count", 1), "carousel_complete": carousel.get("complete", False),
                 "permalink": case.permalink, "published_at": extraction["published_at"], "brands": [item["name"] for item in extraction.get("brand_mentions", [])]})
     results.sort(key=lambda item: item["published_at"], reverse=True)
-    return {"results": results[:100]}
+    return {"results": results}
 
 
 class RunReport(BaseModel):
     run_id: str = Field(pattern=r"^[a-zA-Z0-9-]{1,64}$")
     status: str = Field(pattern=r"^(awaiting_login|running|completed|partial|blocked|failed|paused|cancelled)$")
     accounts_checked: int = Field(default=0, ge=0, le=200)
-    posts_checked: int = Field(default=0, ge=0, le=2400)
-    imported: int = Field(default=0, ge=0, le=2400)
-    updated: int = Field(default=0, ge=0, le=2400)
+    posts_checked: int = Field(default=0, ge=0, le=1000000)
+    imported: int = Field(default=0, ge=0, le=1000000)
+    updated: int = Field(default=0, ge=0, le=1000000)
     detail: str = Field(default="", max_length=1000)
     exclusions: dict[str, int] = Field(default_factory=dict, max_length=20)
     current_account: str = Field(default="", max_length=180)
     accounts_total: int = Field(default=0, ge=0, le=200)
     dry_run: bool = False
+    coverage: CoverageReport | None = None
 
 
 @router.post("/runs")
@@ -257,9 +267,12 @@ def report_run(payload: RunReport, db: Session = Depends(get_db)):
 
 
 @router.post("/posts")
-async def import_post(metadata: str = Form(..., max_length=15000), image: UploadFile = File(...), images: list[UploadFile] = File(default=[]), db: Session = Depends(get_db)):
+async def import_post(metadata: str = Form(..., max_length=15000), image: UploadFile | None = File(None), images: list[UploadFile] = File(default=[]),
+        upload_keys: str = Form(""), db: Session = Depends(get_db)):
     settings = get_settings()
-    uploads = [image, *images]
+    uploads = [image, *images] if image is not None else staged_uploads(upload_keys)
+    if not uploads:
+        raise HTTPException(422, "Send at least one photo")
     try:
         payload = BrowserPost.model_validate_json(metadata)
         person, matches = eligible_post(payload, config_for(db), settings.reddit_daily_timezone)
@@ -352,10 +365,13 @@ async def import_post(metadata: str = Form(..., max_length=15000), image: Upload
             **({"collage_edit": edit} if edit else {})}
         if not existing or added_ids or cover_refreshed:
             candidates = [candidate for candidate in case.candidates if candidate.status != "automation_draft_anchor"]
-            collage = render_draft_collage(db, case, candidates, settings, str(Path(__file__).parent / "static"),
-                reason="Photos captured from the same browser-observed Instagram carousel. Brand attribution, outfit identity and publication rights require review.")
             panel_count = len(build_render_assets(case, candidates, include_automation_matches=True, panel_ids=edit.get("panel_ids")))
-            case.extraction = {**case.extraction, "automatic_collage": {"id": collage.id, "panels": panel_count}}
+            if getattr(settings, "collage_render_on_pull", False):
+                collage = render_draft_collage(db, case, candidates, settings, getattr(settings, "static_dir", "") or str(Path(__file__).parent / "static"),
+                    reason="Photos captured from the same browser-observed Instagram carousel. Brand attribution, outfit identity and publication rights require review.")
+                case.extraction = {**case.extraction, "automatic_collage": {"id": collage.id, "panels": panel_count}}
+            else:
+                case.extraction = {**case.extraction, "automatic_collage": {"id": None, "panels": panel_count, "pending": True}}
         db.add(AuditEvent(entity_type="case", entity_id=case.id, action="instagram_carousel_expanded" if existing else "instagram_browser_imported",
             actor=current_actor(), detail={"source": permalink, "photo_count": len(known), "complete": complete, "added": len(added_ids)}))
         db.commit()
@@ -371,4 +387,4 @@ async def import_post(metadata: str = Form(..., max_length=15000), image: Upload
     finally:
         for path in paths:
             if path not in retained:
-                (Path(settings.media_dir) / "editor" / Path(path).name).unlink(missing_ok=True)
+                get_storage().delete(Path(settings.media_dir) / "editor" / Path(path).name)

@@ -11,12 +11,14 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from .archive import remember_wordpress_collage
 from .config import get_settings
 from .database import get_db
 from .editorial import locked_state
 from .models import AuditEvent, Candidate, Case, Collage, EditorSession, ServiceState, StoryDraft
 from .review import approval_errors
 from .security import current_actor
+from .storage import get_storage
 
 router = APIRouter(prefix="/api")
 
@@ -65,6 +67,8 @@ def handoff_manifest(db, case_id):
         raise HTTPException(422, "Add a title, story, image description and photo credits")
     if story.reviewed_collage_id != collage.id:
         raise HTTPException(422, "Confirm the sources and usage rights for the latest collage")
+    if not get_storage().ensure(collage.manifest_path):
+        raise HTTPException(422, "This collage's files are no longer stored. Re-render it before sending.")
     manifest = json.loads(Path(collage.manifest_path).read_text(encoding="utf-8"))
     if manifest.get("outfit", {}).get("designer") != case.designer or manifest.get("outfit", {}).get("celebrity") != case.celebrity:
         raise HTTPException(422, "Attribution changed. Re-render this collage before sending it.")
@@ -165,6 +169,7 @@ def send_draft(case_id: str, x_wp_authorization: str = Header(default=""), db: S
             attachment = media[0]
         else:
             image_path = Path(collage.image_path)
+            get_storage().ensure(image_path)
             with image_path.open("rb") as source:
                 attachment = wp_request(x_wp_authorization, "POST", "media", files={"file": (f"{media_slug}.webp", source, "image/webp")}, data={"slug": media_slug, "alt_text": story.alt_text, "caption": story.credits})
         story.wordpress_media_id = int(attachment["id"])
@@ -179,6 +184,15 @@ def send_draft(case_id: str, x_wp_authorization: str = Header(default=""), db: S
         story.sync_state = "draft_created"
         db.add(AuditEvent(entity_type="case", entity_id=case_id, action="wordpress_draft_sent", actor=current_actor(), detail={"post_id": post["id"], "collage_id": collage.id, "story_revision": story.revision}))
         db.commit()
+        try:
+            # WordPress keeps the final collage; we keep its URL and a reference photo.
+            # The draft is already committed, so archive bookkeeping must not mark it uncertain.
+            case = db.get(Case, case_id)
+            if case:
+                remember_wordpress_collage(db, case, attachment["source_url"], settings.media_dir)
+                db.commit()
+        except Exception:
+            db.rollback()
         return {"post_id": post["id"], "status": "draft", "edit_url": f"{site}/wp-admin/post.php?post={post['id']}&action=edit"}
     except Exception:
         db.rollback()

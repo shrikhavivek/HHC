@@ -39,6 +39,8 @@ def test_brand_evidence_is_not_any_mention():
     assert browser.brand_mentions("My look", ["gucci"], brands)
     assert not browser.brand_mentions("@guccifan @stylist", [], brands)
     assert not browser.brand_mentions("Guccified", [], brands)
+    assert browser.brand_mentions("Outfit: @newfashionlabel", [], brands)[0]["name"] == "@newfashionlabel"
+    assert not browser.brand_mentions("Photos: @newfashionlabel", [], brands)
 
 
 def test_unwatched_old_video_and_no_brand_posts_are_rejected():
@@ -60,7 +62,7 @@ def test_browser_import_auth_duplicate_date_brand_and_image_validation(monkeypat
         with Session(engine) as db:
             yield db
     main.app.dependency_overrides[get_db] = database
-    monkeypatch.setattr(browser, "get_settings", lambda: SimpleNamespace(reddit_daily_timezone="Asia/Kolkata", media_dir=str(tmp_path), output_dir=str(tmp_path / "outputs")))
+    monkeypatch.setattr(browser, "get_settings", lambda: SimpleNamespace(reddit_daily_timezone="Asia/Kolkata", media_dir=str(tmp_path), output_dir=str(tmp_path / "outputs"), collage_render_on_pull=True))
     metadata = {"handle": "kritisanon", "shortcode": "abc", "published_at": datetime.now(timezone.utc).isoformat(), "caption": "Wearing @gucci", "media_type": "IMAGE", "date_evidence": "post_permalink_time"}
     photo = io.BytesIO()
     Image.new("RGB", (400, 600)).save(photo, "PNG")
@@ -85,7 +87,7 @@ def test_browser_import_auth_duplicate_date_brand_and_image_validation(monkeypat
             assert cases[0].extraction["brand_mentions"][0]["name"] == "Gucci"
             assert cases[0].status == "context_review"
             assert cases[0].extraction["automatic_collage"]["panels"] == 1
-            assert list(Path(tmp_path / "outputs").rglob("*.png"))
+            assert list(Path(tmp_path / "outputs").rglob("collage.webp"))
         feed = client.get("/api/instagram-browser/posts", headers=headers).json()["results"]
         assert len(feed) == 1
         assert feed[0]["brands"] == ["Gucci"]
@@ -115,10 +117,20 @@ def browser_client():
         engine.dispose()
 
 
+def test_recent_feed_does_not_hide_posts_after_first_hundred(browser_client, monkeypatch, tmp_path):
+    client, headers, engine = browser_client
+    monkeypatch.setattr(browser, "get_settings", lambda: SimpleNamespace(reddit_daily_timezone="Asia/Kolkata", media_dir=str(tmp_path), output_dir=str(tmp_path / "outputs")))
+    with Session(engine) as db:
+        for index in range(105):
+            db.add(Case(source_type="public_post_url", external_id=f"instagram-browser:feed{index}", permalink=f"https://www.instagram.com/p/feed{index}/", source_title="Kriti Sanon in Gucci", celebrity="Kriti Sanon", extraction={"published_at": datetime.now(timezone.utc).isoformat(), "brand_mentions": [{"name": "Gucci"}]}))
+        db.commit()
+    assert len(client.get("/api/instagram-browser/posts", headers=headers).json()["results"]) == 105
+
+
 @pytest.mark.parametrize("legacy", [False, True])
 def test_carousel_import_expands_existing_draft_without_duplicate_or_lost_edits(browser_client, monkeypatch, tmp_path, legacy):
     client, headers, engine = browser_client
-    monkeypatch.setattr(browser, "get_settings", lambda: SimpleNamespace(reddit_daily_timezone="Asia/Kolkata", media_dir=str(tmp_path), output_dir=str(tmp_path / "outputs")))
+    monkeypatch.setattr(browser, "get_settings", lambda: SimpleNamespace(reddit_daily_timezone="Asia/Kolkata", media_dir=str(tmp_path), output_dir=str(tmp_path / "outputs"), collage_render_on_pull=True))
     metadata = {"handle": "ananyapanday", "shortcode": "carousel", "published_at": datetime.now(timezone.utc).isoformat(), "caption": "Wearing @chanelofficial", "media_type": "IMAGE", "date_evidence": "post_permalink_time"}
     photos = []
     for color in ["red", "blue", "green"]:
