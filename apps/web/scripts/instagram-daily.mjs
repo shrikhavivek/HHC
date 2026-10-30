@@ -169,6 +169,7 @@ try {
     } catch (error) {
       if (page.isClosed()) throw new InstagramLoginCancelled("Instagram was closed. Choose Scan now to start a new scan.");
       if (error instanceof AccessBlocked || String(error.message).startsWith("Local API")) throw error;
+      console.error(`Account check failed for @${person.handle}: ${error.stack || error.message}`);
       exclude("account_check_failed");
       const index = summary.coverage.targets.findIndex(item => item.target === person.handle);
       summary.coverage.targets[index] = { ...summary.coverage.targets[index], status: "partial", stop_reason: "account_check_failed" };
